@@ -1,0 +1,8 @@
+{
+  "segments": [
+    { "id": "s1", "startTime": 1500, "endTime": 4900,
+      "description": "A woman crosses the street holding a red umbrella." },
+    { "id": "s2", "startTime": 7200, "endTime": 9000,
+      "description": "The camera pans across an empty warehouse floor." }
+  ]
+}
