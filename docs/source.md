@@ -87,7 +87,11 @@ class SynthesisResult:
     request_payload: str        # SSML or prompt, for the report and --dry-run
 ```
 
-`target_ms` is **advisory**. Azure honours it; Gemini ignores it and must return `duration_constrained=False`. Calling code branches on that returned flag, **never on the provider name** — no `if provider == "azure"` checks outside the provider modules.
+`target_ms` is **advisory**. Azure provides hard duration targeting; Gemini
+uses it for best-effort prompt-based pace correction and must return
+`duration_constrained=False`. Calling code branches on provider capabilities,
+never on the provider name — no `if provider == "azure"` checks outside the
+provider modules.
 
 ## Configuration
 
@@ -105,6 +109,8 @@ GEMINI_BASE_URL=                  # optional: custom/proxy base URL, blank = Goo
 GEMINI_MODEL=gemini-3.1-flash-tts-preview
 GEMINI_VOICE=Charon
 GEMINI_STYLE_PROMPT=Read as a neutral documentary narrator. American English. Even pacing, no emotional colour. Do not add, omit or reorder any words.
+GEMINI_TIMING_ATTEMPTS=2
+GEMINI_TIMING_TOLERANCE_MS=150
 
 # --- Azure ---
 AZURE_SPEECH_KEY=
@@ -191,11 +197,25 @@ Add `--no-cache` to force fresh renders and `--dry-run` to print the fully resol
 
 ### Gemini
 
+- Use the Interactions API: `client.interactions.create(...)` with
+  `response_format={"type": "audio"}` and
+  `generation_config={"speech_config": [{"voice": VOICE}]}`. Read audio from
+  `interaction.output_audio.data` and usage from `interaction.usage`.
 - **No SSML.** Send the style prompt and the segment text as **clearly separated parts**, never concatenated into one blob. Instructions bleeding into spoken output is the most common failure mode with LLM-native TTS, and prompt separation is the main defence against it.
 - Response is raw headerless PCM — no stripping needed, but a WAV header must be added on write.
-- `target_ms` is ignored; return `duration_constrained=False`.
+- Gemini has no hard duration parameter, so always return
+  `duration_constrained=False`. When `target_ms` is provided in `constrain`
+  mode, add explicit duration and words-per-second direction, retry up to
+  `GEMINI_TIMING_ATTEMPTS`, and return the render closest to the target. Stop
+  early within `GEMINI_TIMING_TOLERANCE_MS`. This is best-effort prompt control,
+  not a duration guarantee.
 - Billing: audio output at **25 tokens per second of audio**. Record input and output tokens separately.
 - Retry on 429/5xx with exponential backoff. Preview rate limits are tight.
+- Google provides no voice-list endpoint. `list_voices()` returns the static set
+  of 30 prebuilt voice ids and style descriptions from Google's speech
+  generation guide, last verified on 2026-08-07. Keep arbitrary configured
+  voice ids pass-through so newly released voices can be evaluated before this
+  snapshot is refreshed.
 
 ### Azure
 
@@ -253,7 +273,11 @@ fit:
 `FIT_MODE` controls what happens next:
 
 - **`measure`** (default) — classify and stop. Both providers behave identically, which is what makes the head-to-head fair.
-- **`constrain`** — for providers where `duration_constrained` can be true, re-render `TIGHT` segments with `target_ms` and record `final_ms` alongside `natural_ms`. Providers that cannot constrain report so and leave the segment as measured, without erroring.
+- **`constrain`** — re-render `TIGHT` and `OVERFLOW` segments with `target_ms`
+  and record `final_ms` alongside `natural_ms`. Providers with hard duration
+  control report `durationConstrained: true`; best-effort providers may supply
+  a closer render with `timingAdjusted: true` while leaving
+  `durationConstrained: false`.
 
 Measure duration from the PCM byte count, never from any value the API reports:
 
@@ -340,7 +364,10 @@ Print a compact table as the run proceeds — id, target, actual, ratio, fit, ca
 3. Every segment's audio starts at its `startTime` within 5 ms — verified by a test using synthetic PCM, not a live API call.
 4. Provider, model, voice, and style prompt or SSML style are each overridable from the CLI, and the resolved values appear in `report.json`.
 5. `compare --provider gemini --provider azure` produces both runs plus a `comparison.json` aligned by segment id.
-6. `--fit-mode constrain` produces Azure segments with `durationConstrained: true` and both `naturalMs` and `finalMs` recorded; the same flag on Gemini leaves segments unconstrained without erroring.
+6. `--fit-mode constrain` produces Azure segments with
+   `durationConstrained: true` and both `naturalMs` and `finalMs` recorded. For
+   Gemini it records the closest prompt-adjusted render as `finalMs`, sets
+   `timingAdjusted: true`, and leaves `durationConstrained: false`.
 7. `variance --repeat 5` reports min/max/mean/stddev of duration for the same input, on either provider.
 8. A forced API failure on one segment leaves the run completing, with that segment marked failed.
 9. `--dry-run` prints the resolved config and the exact payload without making a call.

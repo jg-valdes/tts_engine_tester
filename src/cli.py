@@ -72,7 +72,9 @@ def _resolved_config(settings: Settings, provider) -> dict:
                 "model": settings.gemini_model,
                 "voice": settings.gemini_voice,
                 "stylePrompt": settings.gemini_style_prompt,
-                "baseUrl": settings.gemini_base_url or "https://generativelanguage.googleapis.com (direct)",
+                "timingAttempts": settings.gemini_timing_attempts,
+                "timingToleranceMs": settings.gemini_timing_tolerance_ms,
+                "baseUrl": settings.gemini_base_url or "https://generativelanguage.googleapis.com",
                 "payloadSample": provider.build_payload("<sample segment text>"),
             }
         )
@@ -95,8 +97,16 @@ def _print_table(rows: list[dict]) -> None:
     for r in rows:
         typer.echo(
             f"{r['id']:<8}{r['targetMs']:>10}{r.get('finalMs', r.get('naturalMs', 0)):>10}"
-            f"{r.get('overflowRatio', 0.0):>8.2f}{r.get('fit', 'ERROR'):>10}{str(r.get('cached', False)):>8}"
+            f"{r.get('finalOverflowRatio', r.get('overflowRatio', 0.0)):>8.2f}"
+            f"{r.get('finalFit', r.get('fit', 'ERROR')):>10}{str(r.get('cached', False)):>8}"
         )
+
+
+def _add_billed_units(first: dict, second: dict) -> dict:
+    combined = dict(first)
+    for key, value in second.items():
+        combined[key] = combined.get(key, 0) + value
+    return combined
 
 
 def run_synth(
@@ -120,7 +130,8 @@ def run_synth(
 
     report_segments = []
     placements: list[tuple[int, bytes]] = []
-    last_end_ms = 0
+    # Preserve the requested full timeline even when the final segment fails.
+    last_end_ms = max((segment.end_time for segment in segments), default=0)
 
     for seg in segments:
         target_ms = seg.end_time - seg.start_time
@@ -167,19 +178,24 @@ def run_synth(
             final_ms = natural_ms
             overflow_ratio, fit = classify_fit(natural_ms, target_ms, settings.max_compression_ratio)
 
-            if settings.fit_mode == "constrain" and fit == "TIGHT":
-                constrained_result = provider.synthesize(seg.description, target_ms=target_ms)
-                if constrained_result.duration_constrained:
-                    pcm = constrained_result.pcm
-                    final_ms = constrained_result.duration_ms
-                    billed_units = constrained_result.billed_units
-                    duration_constrained = True
+            timing_adjusted = False
+            if settings.fit_mode == "constrain" and fit in ("TIGHT", "OVERFLOW"):
+                targeted_result = provider.synthesize(seg.description, target_ms=target_ms)
+                billed_units = _add_billed_units(billed_units, targeted_result.billed_units)
+                if abs(targeted_result.duration_ms - target_ms) < abs(natural_ms - target_ms):
+                    pcm = targeted_result.pcm
+                    final_ms = targeted_result.duration_ms
+                    duration_constrained = targeted_result.duration_constrained
+                    timing_adjusted = True
+
+            final_overflow_ratio, final_fit = classify_fit(
+                final_ms, target_ms, settings.max_compression_ratio
+            )
 
             file_path = seg_dir / f"{seg.id}.wav"
             write_wav(file_path, pcm, settings.sample_rate, settings.sample_width, settings.channels)
 
             placements.append((seg.start_time, pcm))
-            last_end_ms = max(last_end_ms, seg.end_time)
 
             row.update(
                 {
@@ -187,7 +203,10 @@ def run_synth(
                     "finalMs": final_ms,
                     "overflowRatio": round(overflow_ratio, 4),
                     "fit": fit,
+                    "finalOverflowRatio": round(final_overflow_ratio, 4),
+                    "finalFit": final_fit,
                     "durationConstrained": duration_constrained,
+                    "timingAdjusted": timing_adjusted,
                     "wordBudget": word_budget(target_ms, settings.words_per_second),
                     "wordCount": word_count(seg.description),
                     "cached": cached,
@@ -241,6 +260,10 @@ def synth(
     model: Optional[str] = typer.Option(None, "--model"),
     voice: Optional[str] = typer.Option(None, "--voice"),
     style_prompt: Optional[str] = typer.Option(None, "--style-prompt"),
+    timing_attempts: Optional[int] = typer.Option(None, "--timing-attempts", min=1),
+    timing_tolerance_ms: Optional[int] = typer.Option(
+        None, "--timing-tolerance-ms", min=0
+    ),
     fit_mode: Optional[str] = typer.Option(None, "--fit-mode"),
     out: Optional[str] = typer.Option(None, "--out"),
     no_cache: bool = typer.Option(False, "--no-cache"),
@@ -256,6 +279,8 @@ def synth(
         azure_voice=voice if provider == "azure" else None,
         gemini_voice=voice if provider == "gemini" else None,
         gemini_style_prompt=style_prompt,
+        gemini_timing_attempts=timing_attempts,
+        gemini_timing_tolerance_ms=timing_tolerance_ms,
         fit_mode=fit_mode,
     )
     settings = load_settings(overrides)
@@ -302,7 +327,8 @@ def voices(
     settings = load_settings(_cli_overrides(provider=provider))
     prov = get_provider(settings.provider, settings)
     for v in prov.list_voices():
-        typer.echo(f"{v.name}\t{v.locale or ''}")
+        details = [value for value in (v.locale, v.description) if value]
+        typer.echo(" -> ".join([v.name, *details]))
 
 
 @app.command()

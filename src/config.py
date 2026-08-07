@@ -26,6 +26,8 @@ class Settings:
     gemini_model: str = "gemini-3.1-flash-tts-preview"
     gemini_voice: str = "Charon"
     gemini_style_prompt: str = _DEFAULT_STYLE_PROMPT
+    gemini_timing_attempts: int = 2
+    gemini_timing_tolerance_ms: int = 150
 
     azure_speech_key: str = ""
     azure_speech_region: str = "eastus"

@@ -10,6 +10,7 @@ from typing import Protocol
 class Voice:
     name: str
     locale: str | None = None
+    description: str | None = None
 
 
 @dataclass

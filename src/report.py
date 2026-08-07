@@ -28,9 +28,13 @@ def build_totals(settings, segments: list[dict], collisions: list[dict], track_d
 
     return {
         "segments": len(segments),
-        "natural": sum(1 for s in segments if s.get("fit") == "NATURAL"),
-        "tight": sum(1 for s in segments if s.get("fit") == "TIGHT"),
-        "overflow": sum(1 for s in segments if s.get("fit") == "OVERFLOW"),
+        "natural": sum(
+            1 for s in segments if s.get("finalFit", s.get("fit")) == "NATURAL"
+        ),
+        "tight": sum(1 for s in segments if s.get("finalFit", s.get("fit")) == "TIGHT"),
+        "overflow": sum(
+            1 for s in segments if s.get("finalFit", s.get("fit")) == "OVERFLOW"
+        ),
         "failed": sum(1 for s in segments if s.get("error")),
         "collisions": len(collisions),
         "billed": billed,
