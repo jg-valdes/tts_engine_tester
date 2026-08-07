@@ -29,6 +29,8 @@
     .option-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid #d9cfbf; border-radius: 12px; background: #f4eee3; }
     .option-card input[type="checkbox"] { width: 20px; height: 20px; margin-top: 2px; flex: 0 0 auto; }
     .option-title { display: block; font-weight: 600; margin-bottom: 4px; }
+    .inline-option { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .inline-option input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
   </style>
 </head>
 <body>
@@ -160,9 +162,17 @@
             <div>
               <label for="azure_voice">Voice</label>
               <div class="actions">
-                <input id="azure_voice" name="azure_voice" value="{{ settings.azure_voice }}">
+                <select id="azure_voice" name="azure_voice" data-current-value="{{ settings.azure_voice }}">
+                  <option value="{{ settings.azure_voice }}">{{ settings.azure_voice or "Select a voice after loading the list" }}</option>
+                </select>
                 <button type="button" class="secondary" id="load-azure-voices">Load voices</button>
+                <button type="button" class="ghost" id="refresh-azure-voices">Refresh</button>
               </div>
+              <div class="muted">Load the Azure catalog, then pick a voice here. If you only want US English voices, enable the filter below first.</div>
+              <label class="inline-option" for="azure_only_us">
+                <input id="azure_only_us" type="checkbox">
+                <span>Only show American voices (`en-US`)</span>
+              </label>
               <div id="azure-voice-status" class="muted"></div>
             </div>
             <div>
@@ -171,7 +181,8 @@
             </div>
             <div>
               <label for="azure_style">Style</label>
-              <input id="azure_style" name="azure_style" value="{{ settings.azure_style }}">
+              <input id="azure_style" name="azure_style" value="{{ settings.azure_style }}" placeholder="Optional: cheerful, chat, customerservice">
+              <div class="muted">Optional speaking style for Azure SSML. Leave empty for the voice default. Not every voice supports every style.</div>
             </div>
           </div>
         </div>
@@ -234,10 +245,18 @@
   </main>
 
   <script>
+    const presetStorageKey = "tts-harness:selected-preset";
     const presetMap = {{ presets|tojson }};
+    const defaultSettings = {{ settings|tojson }};
     const segmentsJson = document.getElementById("segments_json");
     const tableBody = document.querySelector("#segment-table tbody");
     const providerSelect = document.getElementById("provider");
+    const presetSelect = document.getElementById("preset_name");
+    const azureVoiceSelect = document.getElementById("azure_voice");
+    const azureVoiceStatus = document.getElementById("azure-voice-status");
+    const azureVoiceFilter = document.getElementById("azure_only_us");
+    let azureVoicePayload = null;
+    let azureVoicesRequested = false;
 
     function activateTab(tabName) {
       document.querySelectorAll("[data-tab]").forEach((item) => {
@@ -246,6 +265,9 @@
       document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
         panel.classList.toggle("active", panel.dataset.tabPanel === tabName);
       });
+      if (tabName === "azure-config" && !azureVoicesRequested) {
+        requestAzureVoices(false);
+      }
     }
 
     function makeRow(segment) {
@@ -291,6 +313,77 @@
       segmentsJson.value = JSON.stringify({segments}, null, 2);
     }
 
+    function filteredAzureVoices() {
+      const voices = (azureVoicePayload && azureVoicePayload.voices) || [];
+      if (!azureVoiceFilter.checked) {
+        return voices;
+      }
+      return voices.filter((voice) => voice.locale === "en-US" || String(voice.name || "").startsWith("en-US-"));
+    }
+
+    function currentAzureVoiceValue() {
+      return azureVoiceSelect.value || azureVoiceSelect.dataset.currentValue || "";
+    }
+
+    function renderAzureVoiceOptions() {
+      const voices = filteredAzureVoices();
+      const currentValue = currentAzureVoiceValue();
+      azureVoiceSelect.innerHTML = "";
+      const placeholderOption = document.createElement("option");
+      placeholderOption.value = "";
+      placeholderOption.textContent = currentValue
+        ? `Current voice: ${currentValue}`
+        : "Select a voice after loading the list";
+      azureVoiceSelect.appendChild(placeholderOption);
+      voices.forEach((voice) => {
+        const option = document.createElement("option");
+        option.value = voice.name;
+        option.textContent = voice.locale ? `${voice.name} (${voice.locale})` : voice.name;
+        if (voice.name === currentValue) {
+          option.selected = true;
+        }
+        azureVoiceSelect.appendChild(option);
+      });
+      if (!voices.some((voice) => voice.name === currentValue)) {
+        azureVoiceSelect.value = "";
+      }
+
+      if (!azureVoicePayload) {
+        azureVoiceStatus.textContent = "";
+        return;
+      }
+
+      const sourceLabel = azureVoicePayload.source === "cache" ? "cache" : "live API";
+      const shownLabel = azureVoiceFilter.checked ? ` Showing ${voices.length} en-US voices.` : "";
+      const staleLabel = azureVoicePayload.stale ? " Cached list is stale." : "";
+      const warningLabel = azureVoicePayload.warning ? ` Fallback reason: ${azureVoicePayload.warning}` : "";
+      azureVoiceStatus.textContent =
+        `Loaded ${azureVoicePayload.voices.length} voices from ${sourceLabel}.${shownLabel}${staleLabel}${warningLabel}`;
+    }
+
+    async function requestAzureVoices(forceRefresh) {
+      azureVoicesRequested = true;
+      azureVoiceStatus.textContent = forceRefresh ? "Refreshing Azure voices..." : "Loading Azure voices...";
+      const response = await fetch("/api/providers/azure/voices", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          azure_speech_key: document.getElementById("azure_speech_key").value,
+          azure_speech_region: document.getElementById("azure_speech_region").value,
+          azure_output_format: document.getElementById("azure_output_format").value,
+          azure_voice: currentAzureVoiceValue(),
+          force_refresh: forceRefresh,
+        }),
+      });
+      const payload = await response.json();
+      if (payload.error) {
+        azureVoiceStatus.textContent = payload.error;
+        return;
+      }
+      azureVoicePayload = payload;
+      renderAzureVoiceOptions();
+    }
+
     document.querySelectorAll("[data-toggle]").forEach((button) => {
       button.addEventListener("click", () => {
         const input = document.getElementById(button.dataset.toggle);
@@ -315,6 +408,12 @@
     }
 
     providerSelect.addEventListener("change", syncProviderTab);
+    azureVoiceFilter.addEventListener("change", renderAzureVoiceOptions);
+    azureVoiceSelect.addEventListener("change", () => {
+      if (azureVoiceSelect.value) {
+        azureVoiceSelect.dataset.currentValue = azureVoiceSelect.value;
+      }
+    });
 
     document.getElementById("sync-from-json").addEventListener("click", syncTableFromJson);
     document.getElementById("add-row").addEventListener("click", () => {
@@ -324,11 +423,22 @@
 
     document.getElementById("preset_name").addEventListener("change", (event) => {
       const preset = presetMap.find((item) => item.name === event.target.value);
-      if (!preset) return;
-      Object.entries(preset.config).forEach(([key, value]) => {
+      const values = preset ? { ...defaultSettings, ...preset.config } : defaultSettings;
+      Object.entries(values).forEach(([key, value]) => {
         const field = document.getElementById(key);
-        if (field) field.value = value;
+        if (!field) return;
+        if (field.type === "checkbox") {
+          field.checked = Boolean(value);
+          return;
+        }
+        field.value = value ?? "";
+        if (field.id === "azure_voice") {
+          field.dataset.currentValue = value ?? "";
+        }
       });
+      window.localStorage.setItem(presetStorageKey, event.target.value || "");
+      renderAzureVoiceOptions();
+      syncProviderTab();
     });
 
     document.getElementById("save-preset").addEventListener("click", async () => {
@@ -354,29 +464,17 @@
       window.location.reload();
     });
 
-    document.getElementById("load-azure-voices").addEventListener("click", async () => {
-      const response = await fetch("/api/providers/azure/voices", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          azure_speech_key: document.getElementById("azure_speech_key").value,
-          azure_speech_region: document.getElementById("azure_speech_region").value,
-          azure_output_format: document.getElementById("azure_output_format").value,
-          azure_voice: document.getElementById("azure_voice").value,
-        }),
-      });
-      const payload = await response.json();
-      const status = document.getElementById("azure-voice-status");
-      if (payload.error) {
-        status.textContent = payload.error;
-        return;
-      }
-      const names = payload.voices.map((voice) => voice.name).slice(0, 20);
-      status.textContent = names.length ? `Loaded ${payload.voices.length} voices. First: ${names.join(", ")}` : "No voices returned";
-    });
+    document.getElementById("load-azure-voices").addEventListener("click", () => requestAzureVoices(false));
+    document.getElementById("refresh-azure-voices").addEventListener("click", () => requestAzureVoices(true));
 
     document.getElementById("run-form").addEventListener("submit", syncJsonFromTable);
     syncTableFromJson();
+    renderAzureVoiceOptions();
+    const rememberedPreset = window.localStorage.getItem(presetStorageKey);
+    if (rememberedPreset !== null) {
+      presetSelect.value = rememberedPreset;
+      presetSelect.dispatchEvent(new Event("change"));
+    }
     syncProviderTab();
   </script>
 </body>
