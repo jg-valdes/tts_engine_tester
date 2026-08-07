@@ -124,6 +124,32 @@ def _build_overrides(payload: dict, preset_config: dict | None = None) -> dict:
     return merged
 
 
+def _single_text_segments(payload: dict) -> list[dict]:
+    text = str(payload.get("single_text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="single text is required")
+    duration_raw = payload.get("single_duration_ms")
+    duration_ms = int(duration_raw) if duration_raw not in (None, "") else 0
+    if duration_ms < 0:
+        raise HTTPException(status_code=400, detail="single text duration must be greater than zero")
+    return [
+        {
+            "id": "sample-1",
+            "startTime": 0,
+            "endTime": duration_ms,
+            "description": text,
+        }
+    ]
+
+
+def _segments_from_payload(payload: dict) -> list[dict]:
+    input_type = str(payload.get("input_type") or "segments")
+    if input_type == "single_text":
+        return _single_text_segments(payload)
+    segments_json = payload.get("segments_json") or json.dumps({"segments": []})
+    return json.loads(segments_json)["segments"]
+
+
 class JobManager:
     def __init__(self, settings: Settings, store: RunStore):
         self.settings = settings
@@ -455,12 +481,14 @@ def create_app(settings: Settings | None = None, store: RunStore | None = None) 
     @app.post("/api/runs/synth")
     async def create_synth_run(request: Request):
         payload = await request.json()
+        payload["segments"] = _segments_from_payload(payload)
         run_id = job_manager.submit_synth(payload)
         return JSONResponse({"runId": run_id, "redirect": f"/runs/{run_id}"})
 
     @app.post("/api/runs/compare")
     async def create_compare_run(request: Request):
         payload = await request.json()
+        payload["segments"] = _segments_from_payload(payload)
         run_id = job_manager.submit_compare(payload)
         return JSONResponse({"runId": run_id, "redirect": f"/runs/{run_id}"})
 
@@ -469,7 +497,7 @@ def create_app(settings: Settings | None = None, store: RunStore | None = None) 
         form = await request.form()
         payload = {key: value for key, value in form.items()}
         payload["no_cache"] = form.get("no_cache") == "on"
-        payload["segments"] = json.loads(form["segments_json"])["segments"]
+        payload["segments"] = _segments_from_payload(payload)
         if form.get("mode") == "compare":
             run_id = job_manager.submit_compare(payload)
         else:

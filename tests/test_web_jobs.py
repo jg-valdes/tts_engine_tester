@@ -184,6 +184,116 @@ class WebJobTests(unittest.TestCase):
                     self.assertEqual(second.json()["source"], "cache")
                     self.assertEqual(FakeAzureProvider.calls, 1)
 
+    def test_single_text_form_creates_one_segment_run(self):
+        asyncio.run(self._single_text_form_creates_one_segment_run())
+
+    async def _single_text_form_creates_one_segment_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(
+                output_dir=str(Path(temp_dir) / "out"),
+                cache_dir=str(Path(temp_dir) / "cache"),
+                web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+                sample_rate=1000,
+                sample_width=2,
+                channels=1,
+            )
+            store = RunStore(settings.web_db_path)
+            app = create_app(settings=settings, store=store)
+
+            def fake_get_provider(name, provider_settings):
+                return FakeProvider(provider_settings, name=name)
+
+            with (
+                patch("src.web.get_provider", side_effect=fake_get_provider),
+                patch("src.runner.get_provider", side_effect=fake_get_provider),
+            ):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    response = await client.post(
+                        "/runs",
+                        data={
+                            "mode": "synth",
+                            "input_type": "single_text",
+                            "provider": "gemini",
+                            "single_text": "One short sample line.",
+                            "single_duration_ms": "2500",
+                            "segments_json": '{"segments":[]}',
+                        },
+                        follow_redirects=False,
+                    )
+                    self.assertEqual(response.status_code, 303)
+                    run_id = response.headers["location"].rsplit("/", 1)[-1]
+
+                progress = None
+                for _ in range(100):
+                    progress = store.get_progress(run_id)
+                    if progress and progress["state"] == "completed":
+                        break
+                    time.sleep(0.02)
+
+                self.assertIsNotNone(progress)
+                self.assertEqual(progress["state"], "completed")
+                run = store.get_run(run_id)
+                assert run is not None
+                self.assertEqual(len(run["segments"]), 1)
+                self.assertEqual(run["segments"][0]["startTime"], 0)
+                self.assertEqual(run["segments"][0]["targetMs"], 2500)
+
+    def test_single_text_form_without_duration_uses_natural_timing(self):
+        asyncio.run(self._single_text_form_without_duration_uses_natural_timing())
+
+    async def _single_text_form_without_duration_uses_natural_timing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(
+                output_dir=str(Path(temp_dir) / "out"),
+                cache_dir=str(Path(temp_dir) / "cache"),
+                web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+                sample_rate=1000,
+                sample_width=2,
+                channels=1,
+            )
+            store = RunStore(settings.web_db_path)
+            app = create_app(settings=settings, store=store)
+
+            def fake_get_provider(name, provider_settings):
+                return FakeProvider(provider_settings, name=name)
+
+            with (
+                patch("src.web.get_provider", side_effect=fake_get_provider),
+                patch("src.runner.get_provider", side_effect=fake_get_provider),
+            ):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    response = await client.post(
+                        "/runs",
+                        data={
+                            "mode": "synth",
+                            "input_type": "single_text",
+                            "provider": "gemini",
+                            "single_text": "Untimed sample line.",
+                            "single_duration_ms": "",
+                            "segments_json": '{"segments":[]}',
+                        },
+                        follow_redirects=False,
+                    )
+                    self.assertEqual(response.status_code, 303)
+                    run_id = response.headers["location"].rsplit("/", 1)[-1]
+
+                progress = None
+                for _ in range(100):
+                    progress = store.get_progress(run_id)
+                    if progress and progress["state"] == "completed":
+                        break
+                    time.sleep(0.02)
+
+                self.assertIsNotNone(progress)
+                self.assertEqual(progress["state"], "completed")
+                run = store.get_run(run_id)
+                assert run is not None
+                self.assertEqual(len(run["segments"]), 1)
+                self.assertIsNone(run["segments"][0]["targetMs"])
+                self.assertEqual(run["segments"][0]["finalFit"], "NATURAL")
+
 
 if __name__ == "__main__":
     unittest.main()

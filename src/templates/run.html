@@ -109,7 +109,7 @@
           {% for segment in run.segments %}
           <tr>
             <td>{{ segment.id }}</td>
-            <td>{{ segment.targetMs }}</td>
+            <td>{{ segment.targetMs if segment.targetMs is not none else "natural" }}</td>
             <td>{{ segment.naturalMs }}</td>
             <td>{{ segment.finalMs }}</td>
             <td>

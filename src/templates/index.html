@@ -31,6 +31,8 @@
     .option-title { display: block; font-weight: 600; margin-bottom: 4px; }
     .inline-option { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
     .inline-option input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
+    .input-panel { display: none; }
+    .input-panel.active { display: block; }
   </style>
 </head>
 <body>
@@ -79,6 +81,13 @@
               <select id="mode" name="mode">
                 <option value="synth">Synth</option>
                 <option value="compare">Compare Gemini vs Azure</option>
+              </select>
+            </div>
+            <div>
+              <label for="input_type">Input type</label>
+              <select id="input_type" name="input_type">
+                <option value="segments">Timestamped segments</option>
+                <option value="single_text">Single text sample</option>
               </select>
             </div>
             <div>
@@ -189,26 +198,44 @@
       </div>
 
       <div class="panel">
-        <h2>Segments</h2>
-        <p class="muted">Edit in the table or paste the JSON directly. <code>startTime</code> and <code>endTime</code> accept integer milliseconds, <code>HH:MM:SS:mmm</code>, or <code>HH:MM:SS:CC</code> centiseconds.</p>
-        <div class="actions">
-          <button type="button" class="ghost" id="sync-from-json">Load table from JSON</button>
-          <button type="button" class="ghost" id="add-row">Add row</button>
+        <div class="input-panel active" data-input-panel="segments">
+          <h2>Segments</h2>
+          <p class="muted">Edit in the table or paste the JSON directly. <code>startTime</code> and <code>endTime</code> accept integer milliseconds, <code>HH:MM:SS:mmm</code>, or <code>HH:MM:SS:CC</code> centiseconds.</p>
+          <div class="actions">
+            <button type="button" class="ghost" id="sync-from-json">Load table from JSON</button>
+            <button type="button" class="ghost" id="add-row">Add row</button>
+          </div>
+          <table id="segment-table">
+            <thead>
+              <tr>
+                <th>id</th>
+                <th>startTime</th>
+                <th>endTime</th>
+                <th>description</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <label for="segments_json">Segments JSON</label>
+          <textarea id="segments_json" name="segments_json">{{ sample_segments }}</textarea>
         </div>
-        <table id="segment-table">
-          <thead>
-            <tr>
-              <th>id</th>
-              <th>startTime</th>
-              <th>endTime</th>
-              <th>description</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <label for="segments_json">Segments JSON</label>
-        <textarea id="segments_json" name="segments_json">{{ sample_segments }}</textarea>
+
+        <div class="input-panel" data-input-panel="single_text">
+          <h2>Single text sample</h2>
+          <p class="muted">Use this when you just want to test one sentence or paragraph. The server will convert it into a single segment starting at 0 ms.</p>
+          <div class="grid">
+            <div style="grid-column: 1 / -1;">
+              <label for="single_text">Text</label>
+              <textarea id="single_text" name="single_text" placeholder="Type one line or paragraph to synthesize"></textarea>
+            </div>
+            <div>
+              <label for="single_duration_ms">Target duration ms (optional)</label>
+              <input id="single_duration_ms" name="single_duration_ms" type="number" min="0" placeholder="Leave blank to use the natural duration">
+              <div class="muted">Leave blank for a free render with no target window. Set a value only when you want to test timing fit.</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="panel">
@@ -250,6 +277,7 @@
     const defaultSettings = {{ settings|tojson }};
     const segmentsJson = document.getElementById("segments_json");
     const tableBody = document.querySelector("#segment-table tbody");
+    const inputTypeSelect = document.getElementById("input_type");
     const providerSelect = document.getElementById("provider");
     const presetSelect = document.getElementById("preset_name");
     const azureVoiceSelect = document.getElementById("azure_voice");
@@ -268,6 +296,12 @@
       if (tabName === "azure-config" && !azureVoicesRequested) {
         requestAzureVoices(false);
       }
+    }
+
+    function syncInputPanels() {
+      document.querySelectorAll("[data-input-panel]").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.inputPanel === inputTypeSelect.value);
+      });
     }
 
     function makeRow(segment) {
@@ -408,6 +442,7 @@
     }
 
     providerSelect.addEventListener("change", syncProviderTab);
+    inputTypeSelect.addEventListener("change", syncInputPanels);
     azureVoiceFilter.addEventListener("change", renderAzureVoiceOptions);
     azureVoiceSelect.addEventListener("change", () => {
       if (azureVoiceSelect.value) {
@@ -467,7 +502,11 @@
     document.getElementById("load-azure-voices").addEventListener("click", () => requestAzureVoices(false));
     document.getElementById("refresh-azure-voices").addEventListener("click", () => requestAzureVoices(true));
 
-    document.getElementById("run-form").addEventListener("submit", syncJsonFromTable);
+    document.getElementById("run-form").addEventListener("submit", () => {
+      if (inputTypeSelect.value === "segments") {
+        syncJsonFromTable();
+      }
+    });
     syncTableFromJson();
     renderAzureVoiceOptions();
     const rememberedPreset = window.localStorage.getItem(presetStorageKey);
@@ -475,6 +514,7 @@
       presetSelect.value = rememberedPreset;
       presetSelect.dispatchEvent(new Event("change"));
     }
+    syncInputPanels();
     syncProviderTab();
   </script>
 </body>
