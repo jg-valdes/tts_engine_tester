@@ -37,6 +37,17 @@ class FakeProvider:
         return [Voice(name="Charon", description="Informative")]
 
 
+class FakeAzureProvider(FakeProvider):
+    calls = 0
+
+    def list_voices(self) -> list[Voice]:
+        type(self).calls += 1
+        return [
+            Voice(name="en-US-AvaNeural", locale="en-US"),
+            Voice(name="es-UY-ValentinaNeural", locale="es-UY"),
+        ]
+
+
 class WebJobTests(unittest.TestCase):
     def test_job_manager_records_progress_and_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -115,6 +126,7 @@ class WebJobTests(unittest.TestCase):
                 output_dir=str(Path(temp_dir) / "out"),
                 cache_dir=str(Path(temp_dir) / "cache"),
                 web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+                azure_speech_key="test-azure-key",
             )
             app = create_app(settings=settings, store=RunStore(settings.web_db_path))
 
@@ -127,6 +139,50 @@ class WebJobTests(unittest.TestCase):
                     response = await client.get("/")
                     self.assertEqual(response.status_code, 200)
                     self.assertIn("tts-harness web", response.text)
+                    self.assertIn("test-azure-key", response.text)
+
+    def test_azure_voices_endpoint_uses_cache(self):
+        asyncio.run(self._azure_voices_endpoint_uses_cache())
+
+    async def _azure_voices_endpoint_uses_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(
+                output_dir=str(Path(temp_dir) / "out"),
+                cache_dir=str(Path(temp_dir) / "cache"),
+                web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+                azure_speech_key="test-azure-key",
+                azure_speech_region="eastus",
+            )
+            app = create_app(settings=settings, store=RunStore(settings.web_db_path))
+            FakeAzureProvider.calls = 0
+
+            def fake_get_provider(name, provider_settings):
+                if name == "azure":
+                    return FakeAzureProvider(provider_settings, name=name)
+                return FakeProvider(provider_settings, name=name)
+
+            with patch("src.web.get_provider", side_effect=fake_get_provider):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    first = await client.post(
+                        "/api/providers/azure/voices",
+                        json={
+                            "azure_speech_key": "test-azure-key",
+                            "azure_speech_region": "eastus",
+                            "force_refresh": True,
+                        },
+                    )
+                    self.assertEqual(first.status_code, 200)
+                    self.assertEqual(first.json()["source"], "live")
+                    self.assertEqual(FakeAzureProvider.calls, 1)
+
+                    second = await client.post(
+                        "/api/providers/azure/voices",
+                        json={"azure_speech_key": "test-azure-key", "azure_speech_region": "eastus"},
+                    )
+                    self.assertEqual(second.status_code, 200)
+                    self.assertEqual(second.json()["source"], "cache")
+                    self.assertEqual(FakeAzureProvider.calls, 1)
 
 
 if __name__ == "__main__":

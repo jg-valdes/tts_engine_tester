@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
 from dataclasses import fields
 from pathlib import Path
@@ -46,6 +47,7 @@ _PRESET_FIELDS = {
     "fit_mode",
 }
 _FIELD_TYPES = {field.name: type(field.default) for field in fields(Settings)}
+_AZURE_VOICE_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 
 def _new_web_run_id(prefix: str) -> str:
@@ -69,6 +71,38 @@ def _coerce(name: str, value: Any):
 
 def _settings_to_form(settings: Settings) -> dict:
     return {field.name: getattr(settings, field.name) for field in fields(Settings)}
+
+
+def _azure_voice_cache_path(settings: Settings, region: str) -> Path:
+    cache_root = Path(settings.web_db_path).resolve().parent / "voice_cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    safe_region = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in region)
+    return cache_root / f"azure_{safe_region}.json"
+
+
+def _load_cached_azure_voices(settings: Settings, region: str, *, allow_stale: bool = False) -> dict | None:
+    cache_path = _azure_voice_cache_path(settings, region)
+    if not cache_path.exists():
+        return None
+    age_seconds = time.time() - cache_path.stat().st_mtime
+    if not allow_stale and age_seconds > _AZURE_VOICE_CACHE_TTL_SECONDS:
+        return None
+    payload = json.loads(cache_path.read_text())
+    payload["cacheAgeSeconds"] = int(age_seconds)
+    payload["stale"] = age_seconds > _AZURE_VOICE_CACHE_TTL_SECONDS
+    return payload
+
+
+def _save_cached_azure_voices(settings: Settings, region: str, voices: list[dict]) -> dict:
+    payload = {
+        "region": region,
+        "fetchedAt": new_run_id(),
+        "voices": voices,
+    }
+    _azure_voice_cache_path(settings, region).write_text(json.dumps(payload, indent=2))
+    payload["cacheAgeSeconds"] = 0
+    payload["stale"] = False
+    return payload
 
 
 def _sanitize_preset(payload: dict) -> dict:
@@ -370,12 +404,53 @@ def create_app(settings: Settings | None = None, store: RunStore | None = None) 
         overrides = _build_overrides(payload)
         overrides["provider"] = provider_name
         provider_settings = load_settings(overrides)
+        if provider_name == "azure":
+            region = provider_settings.azure_speech_region
+            force_refresh = bool(payload.get("force_refresh", False))
+            if not force_refresh:
+                cached = _load_cached_azure_voices(provider_settings, region)
+                if cached is not None:
+                    return JSONResponse(
+                        {
+                            "voices": cached["voices"],
+                            "source": "cache",
+                            "stale": cached["stale"],
+                            "cacheAgeSeconds": cached["cacheAgeSeconds"],
+                        }
+                    )
+
+            provider = get_provider(provider_name, provider_settings)
+            try:
+                voices = [voice.__dict__ for voice in provider.list_voices()]
+                cached = _save_cached_azure_voices(provider_settings, region, voices)
+                return JSONResponse(
+                    {
+                        "voices": voices,
+                        "source": "live",
+                        "stale": False,
+                        "cacheAgeSeconds": cached["cacheAgeSeconds"],
+                    }
+                )
+            except Exception as exc:
+                cached = _load_cached_azure_voices(provider_settings, region, allow_stale=True)
+                if cached is not None:
+                    return JSONResponse(
+                        {
+                            "voices": cached["voices"],
+                            "source": "cache",
+                            "stale": cached["stale"],
+                            "cacheAgeSeconds": cached["cacheAgeSeconds"],
+                            "warning": str(exc),
+                        }
+                    )
+                return JSONResponse({"voices": [], "error": str(exc)}, status_code=200)
+
         provider = get_provider(provider_name, provider_settings)
         try:
             voices = [voice.__dict__ for voice in provider.list_voices()]
         except Exception as exc:
             return JSONResponse({"voices": [], "error": str(exc)}, status_code=200)
-        return JSONResponse({"voices": voices})
+        return JSONResponse({"voices": voices, "source": "live"})
 
     @app.post("/api/runs/synth")
     async def create_synth_run(request: Request):
