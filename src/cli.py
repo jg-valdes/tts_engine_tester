@@ -3,252 +3,51 @@
 from __future__ import annotations
 
 import json
-import logging
 import statistics
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-from .audio import assemble_timeline, measure_duration_ms, strip_riff_header, write_wav
-from .cache import Cache, cache_key
-from .config import Settings, load_settings
-from .fitting import classify_fit, word_budget, word_count
-from .providers.azure import AzureProvider
-from .providers.gemini import GeminiProvider
-from .report import build_report, new_run_id
+from .config import load_settings
+from .report import new_run_id
+from .runner import (
+    Segment,
+    build_comparison,
+    get_provider,
+    load_segments,
+    resolved_config,
+    run_synth,
+)
+from .web import create_app
 
 app = typer.Typer(help="Evaluate TTS providers on timed segments.")
-
-log = logging.getLogger("tts_harness")
-
-
-@dataclass
-class Segment:
-    id: str
-    start_time: int
-    end_time: int
-    description: str
-
-
-def get_provider(name: str, settings: Settings):
-    if name == "gemini":
-        return GeminiProvider(settings)
-    if name == "azure":
-        return AzureProvider(settings)
-    raise typer.BadParameter(f"unknown provider: {name!r} (expected 'gemini' or 'azure')")
-
-
-def load_segments(input_path: str) -> list[Segment]:
-    data = json.loads(Path(input_path).read_text())
-    segments = []
-    for i, raw in enumerate(data["segments"]):
-        segments.append(
-            Segment(
-                id=raw.get("id") or f"s{i + 1}",
-                start_time=raw["startTime"],
-                end_time=raw["endTime"],
-                description=raw["description"],
-            )
-        )
-    return segments
 
 
 def _cli_overrides(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _resolved_config(settings: Settings, provider) -> dict:
-    common = {
-        "fitMode": settings.fit_mode,
-        "sampleRate": settings.sample_rate,
-        "sampleWidth": settings.sample_width,
-        "channels": settings.channels,
-    }
-    if provider.name == "gemini":
-        common.update(
-            {
-                "model": settings.gemini_model,
-                "voice": settings.gemini_voice,
-                "stylePrompt": settings.gemini_style_prompt,
-                "timingAttempts": settings.gemini_timing_attempts,
-                "timingToleranceMs": settings.gemini_timing_tolerance_ms,
-                "baseUrl": settings.gemini_base_url or "https://generativelanguage.googleapis.com",
-                "payloadSample": provider.build_payload("<sample segment text>"),
-            }
-        )
-    else:
-        common.update(
-            {
-                "voice": settings.azure_voice,
-                "region": settings.azure_speech_region,
-                "style": settings.azure_style,
-                "payloadSample": provider.build_payload("<sample segment text>", None),
-            }
-        )
-    return common
-
-
 def _print_table(rows: list[dict]) -> None:
     header = f"{'id':<8}{'target_ms':>10}{'actual_ms':>10}{'ratio':>8}{'fit':>10}{'cached':>8}"
     typer.echo(header)
     typer.echo("-" * len(header))
-    for r in rows:
+    for row in rows:
         typer.echo(
-            f"{r['id']:<8}{r['targetMs']:>10}{r.get('finalMs', r.get('naturalMs', 0)):>10}"
-            f"{r.get('finalOverflowRatio', r.get('overflowRatio', 0.0)):>8.2f}"
-            f"{r.get('finalFit', r.get('fit', 'ERROR')):>10}{str(r.get('cached', False)):>8}"
+            f"{row['id']:<8}{row['targetMs']:>10}{row.get('finalMs', row.get('naturalMs', 0)):>10}"
+            f"{row.get('finalOverflowRatio', row.get('overflowRatio', 0.0)):>8.2f}"
+            f"{row.get('finalFit', row.get('fit', 'ERROR')):>10}{str(row.get('cached', False)):>8}"
         )
 
 
-def _add_billed_units(first: dict, second: dict) -> dict:
-    combined = dict(first)
-    for key, value in second.items():
-        combined[key] = combined.get(key, 0) + value
-    return combined
-
-
-def run_synth(
-    settings: Settings,
-    provider_name: str,
-    segments: list[Segment],
-    out_dir: Path,
-    dry_run: bool,
-    no_cache: bool,
-) -> dict:
-    provider = get_provider(provider_name, settings)
-
-    if dry_run:
-        config = _resolved_config(settings, provider)
-        typer.echo(json.dumps({"provider": provider_name, "config": config}, indent=2))
-        return {"dryRun": True, "provider": provider_name, "config": config}
-
-    cache = None if no_cache else Cache(settings.cache_dir)
-    seg_dir = out_dir / "segments"
-    seg_dir.mkdir(parents=True, exist_ok=True)
-
-    report_segments = []
-    placements: list[tuple[int, bytes]] = []
-    # Preserve the requested full timeline even when the final segment fails.
-    last_end_ms = max((segment.end_time for segment in segments), default=0)
-
-    for seg in segments:
-        target_ms = seg.end_time - seg.start_time
-        row: dict = {
-            "id": seg.id,
-            "text": seg.description,
-            "startTime": seg.start_time,
-            "endTime": seg.end_time,
-            "targetMs": target_ms,
-        }
-        try:
-            payload = provider.build_payload(seg.description, None)
-            key = cache_key(
-                provider.name,
-                getattr(settings, f"{provider.name}_model", ""),
-                getattr(settings, f"{provider.name}_voice", ""),
-                payload,
-                seg.description,
-                None,
-                settings.sample_rate,
-            )
-            cached_wav = cache.get(key) if cache else None
-            if cached_wav is not None:
-                pcm = strip_riff_header(cached_wav)
-                natural_ms = measure_duration_ms(
-                    pcm, settings.sample_rate, settings.sample_width, settings.channels
-                )
-                cached = True
-                billed_units = {}
-                duration_constrained = False
-            else:
-                result = provider.synthesize(seg.description, target_ms=None)
-                pcm = result.pcm
-                natural_ms = result.duration_ms
-                billed_units = result.billed_units
-                duration_constrained = result.duration_constrained
-                cached = False
-                if cache:
-                    cache.put(
-                        key,
-                        _wav_bytes(pcm, settings.sample_rate, settings.sample_width, settings.channels),
-                    )
-
-            final_ms = natural_ms
-            overflow_ratio, fit = classify_fit(natural_ms, target_ms, settings.max_compression_ratio)
-
-            timing_adjusted = False
-            if settings.fit_mode == "constrain" and fit in ("TIGHT", "OVERFLOW"):
-                targeted_result = provider.synthesize(seg.description, target_ms=target_ms)
-                billed_units = _add_billed_units(billed_units, targeted_result.billed_units)
-                if abs(targeted_result.duration_ms - target_ms) < abs(natural_ms - target_ms):
-                    pcm = targeted_result.pcm
-                    final_ms = targeted_result.duration_ms
-                    duration_constrained = targeted_result.duration_constrained
-                    timing_adjusted = True
-
-            final_overflow_ratio, final_fit = classify_fit(
-                final_ms, target_ms, settings.max_compression_ratio
-            )
-
-            file_path = seg_dir / f"{seg.id}.wav"
-            write_wav(file_path, pcm, settings.sample_rate, settings.sample_width, settings.channels)
-
-            placements.append((seg.start_time, pcm))
-
-            row.update(
-                {
-                    "naturalMs": natural_ms,
-                    "finalMs": final_ms,
-                    "overflowRatio": round(overflow_ratio, 4),
-                    "fit": fit,
-                    "finalOverflowRatio": round(final_overflow_ratio, 4),
-                    "finalFit": final_fit,
-                    "durationConstrained": duration_constrained,
-                    "timingAdjusted": timing_adjusted,
-                    "wordBudget": word_budget(target_ms, settings.words_per_second),
-                    "wordCount": word_count(seg.description),
-                    "cached": cached,
-                    "billedUnits": billed_units,
-                    "file": f"segments/{seg.id}.wav",
-                }
-            )
-        except Exception as exc:  # one failed segment must not fail the run
-            log.exception("segment %s failed", seg.id)
-            row["error"] = str(exc)
-
-        report_segments.append(row)
-
-    track_pcm, collisions = assemble_timeline(
-        placements, last_end_ms, settings.sample_rate, settings.sample_width, settings.channels
-    )
-    write_wav(out_dir / "track.wav", track_pcm, settings.sample_rate, settings.sample_width, settings.channels)
-    track_duration_ms = measure_duration_ms(
-        track_pcm, settings.sample_rate, settings.sample_width, settings.channels
-    )
-
-    config = _resolved_config(settings, provider)
-    report = build_report(new_run_id(), provider_name, config, report_segments, collisions, track_duration_ms, settings)
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(json.dumps(report, indent=2))
-
-    _print_table(report_segments)
+def _print_report(report: dict, out_dir: Path) -> None:
+    _print_table(report["segments"])
     typer.echo(
         f"\n{report['totals']['natural']} natural, {report['totals']['tight']} tight, "
         f"{report['totals']['overflow']} overflow, {report['totals']['failed']} failed "
         f"({report['totals']['cacheHits']} cache hits)"
     )
     typer.echo(f"track: {out_dir / 'track.wav'}")
-
-    return report
-
-
-def _wav_bytes(pcm: bytes, sample_rate: int, sample_width: int, channels: int) -> bytes:
-    from .audio import pcm_to_wav_bytes
-
-    return pcm_to_wav_bytes(pcm, sample_rate, sample_width, channels)
 
 
 @app.command()
@@ -261,9 +60,7 @@ def synth(
     voice: Optional[str] = typer.Option(None, "--voice"),
     style_prompt: Optional[str] = typer.Option(None, "--style-prompt"),
     timing_attempts: Optional[int] = typer.Option(None, "--timing-attempts", min=1),
-    timing_tolerance_ms: Optional[int] = typer.Option(
-        None, "--timing-tolerance-ms", min=0
-    ),
+    timing_tolerance_ms: Optional[int] = typer.Option(None, "--timing-tolerance-ms", min=0),
     fit_mode: Optional[str] = typer.Option(None, "--fit-mode"),
     out: Optional[str] = typer.Option(None, "--out"),
     no_cache: bool = typer.Option(False, "--no-cache"),
@@ -289,11 +86,15 @@ def synth(
         segments = load_segments(input)
     else:
         end_time = duration or 3000
-        segments = [Segment(id="adhoc", start_time=0, end_time=end_time, description=text)]
+        segments = [Segment(id="adhoc", start_time=0, end_time=end_time, description=text or "")]
 
     run_id = new_run_id()
     out_dir = Path(out) if out else Path(settings.output_dir) / run_id
-    run_synth(settings, settings.provider, segments, out_dir, dry_run, no_cache)
+    report = run_synth(settings, settings.provider, segments, out_dir, dry_run, no_cache)
+    if dry_run:
+        typer.echo(json.dumps(report, indent=2))
+        return
+    _print_report(report, out_dir)
 
 
 @app.command()
@@ -326,9 +127,9 @@ def voices(
     """List voices for the configured provider."""
     settings = load_settings(_cli_overrides(provider=provider))
     prov = get_provider(settings.provider, settings)
-    for v in prov.list_voices():
-        details = [value for value in (v.locale, v.description) if value]
-        typer.echo(" -> ".join([v.name, *details]))
+    for voice in prov.list_voices():
+        details = [value for value in (voice.locale, voice.description) if value]
+        typer.echo(" -> ".join([voice.name, *details]))
 
 
 @app.command()
@@ -344,37 +145,35 @@ def compare(
     out_dir = Path(out)
     reports: dict[str, dict] = {}
 
-    for prov_name in provider:
-        settings = load_settings(_cli_overrides(provider=prov_name))
-        typer.echo(f"\n=== {prov_name} ===")
-        reports[prov_name] = run_synth(settings, prov_name, segments, out_dir / prov_name, dry_run, no_cache)
+    for provider_name in provider:
+        settings = load_settings(_cli_overrides(provider=provider_name))
+        typer.echo(f"\n=== {provider_name} ===")
+        report = run_synth(settings, provider_name, segments, out_dir / provider_name, dry_run, no_cache)
+        reports[provider_name] = report
+        if dry_run:
+            typer.echo(json.dumps(report, indent=2))
+        else:
+            _print_report(report, out_dir / provider_name)
 
     if dry_run:
         return
 
-    comparison_segments = []
-    by_provider_segments = {p: {s["id"]: s for s in reports[p]["segments"]} for p in provider}
-    for seg in segments:
-        entry: dict = {"id": seg.id, "text": seg.description, "startTime": seg.start_time, "endTime": seg.end_time}
-        for p in provider:
-            s = by_provider_segments[p].get(seg.id, {})
-            entry[p] = {
-                "naturalMs": s.get("naturalMs"),
-                "overflowRatio": s.get("overflowRatio"),
-                "fit": s.get("fit"),
-                "error": s.get("error"),
-            }
-        comparison_segments.append(entry)
-
-    comparison = {
-        "runId": new_run_id(),
-        "providers": provider,
-        "totals": {p: reports[p]["totals"] for p in provider},
-        "segments": comparison_segments,
-    }
+    comparison = build_comparison(provider, reports, segments)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "comparison.json").write_text(json.dumps(comparison, indent=2))
     typer.echo(f"\ncomparison: {out_dir / 'comparison.json'}")
+
+
+@app.command()
+def web(
+    host: Optional[str] = typer.Option(None, "--host"),
+    port: Optional[int] = typer.Option(None, "--port"),
+) -> None:
+    """Run the local web UI for configuring and testing renders."""
+    settings = load_settings(_cli_overrides(web_host=host, web_port=port))
+    import uvicorn
+
+    uvicorn.run(create_app(settings=settings), host=settings.web_host, port=settings.web_port)
 
 
 if __name__ == "__main__":

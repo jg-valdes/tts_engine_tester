@@ -51,6 +51,9 @@ class Settings:
     cache_dir: str = "./.cache"
     max_concurrency: int = 2
     log_level: str = "INFO"
+    web_db_path: str = "./.webui/tts_harness.db"
+    web_host: str = "127.0.0.1"
+    web_port: int = 8000
 
 
 _ENV_PREFIX_TYPES = {f.name: type(f.default) for f in fields(Settings)}

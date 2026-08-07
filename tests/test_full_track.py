@@ -4,8 +4,9 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
-from src.cli import Segment, run_synth
+from src.runner import Segment, run_synth
 from src.config import Settings
+from src.providers.base import ProviderRateLimitError
 from src.providers.base import SynthesisResult, Voice
 
 
@@ -34,6 +35,11 @@ class FakeProvider:
         return []
 
 
+class RateLimitedProvider(FakeProvider):
+    def synthesize(self, text: str, *, target_ms: int | None = None) -> SynthesisResult:
+        raise ProviderRateLimitError("gemini", "Gemini rate limit reached (HTTP 429)")
+
+
 class FullTrackTests(unittest.TestCase):
     def test_timestamped_sentences_are_placed_on_one_absolute_timeline(self):
         settings = Settings(sample_rate=1000, sample_width=2, channels=1)
@@ -45,8 +51,8 @@ class FullTrackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_dir = Path(temp_dir) / "run"
             with (
-                patch("src.cli.get_provider", return_value=FakeProvider(settings)),
-                patch("src.cli.log.exception"),
+                patch("src.runner.get_provider", return_value=FakeProvider(settings)),
+                patch("src.runner.log.exception"),
             ):
                 report = run_synth(settings, "gemini", segments, out_dir, False, True)
 
@@ -70,8 +76,8 @@ class FullTrackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_dir = Path(temp_dir) / "run"
             with (
-                patch("src.cli.get_provider", return_value=FakeProvider(settings)),
-                patch("src.cli.log.exception"),
+                patch("src.runner.get_provider", return_value=FakeProvider(settings)),
+                patch("src.runner.log.exception"),
             ):
                 report = run_synth(settings, "gemini", segments, out_dir, False, True)
 
@@ -92,7 +98,7 @@ class FullTrackTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             out_dir = Path(temp_dir) / "run"
-            with patch("src.cli.get_provider", return_value=FakeProvider(settings)):
+            with patch("src.runner.get_provider", return_value=FakeProvider(settings)):
                 report = run_synth(settings, "gemini", segments, out_dir, False, True)
 
         segment = report["segments"][0]
@@ -104,6 +110,24 @@ class FullTrackTests(unittest.TestCase):
         self.assertEqual(segment["finalFit"], "TIGHT")
         self.assertEqual(report["totals"]["tight"], 1)
         self.assertEqual(report["totals"]["overflow"], 0)
+
+    def test_rate_limited_segment_gets_placeholder_metrics_and_run_continues(self):
+        settings = Settings(sample_rate=1000, sample_width=2, channels=1)
+        segments = [Segment("s1", 0, 200, "first")]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_dir = Path(temp_dir) / "run"
+            with patch("src.runner.get_provider", return_value=RateLimitedProvider(settings)):
+                report = run_synth(settings, "gemini", segments, out_dir, False, True)
+
+        segment = report["segments"][0]
+        self.assertTrue(segment["rateLimited"])
+        self.assertEqual(segment["fit"], "RATE_LIMIT")
+        self.assertEqual(segment["finalFit"], "RATE_LIMIT")
+        self.assertIsNone(segment["naturalMs"])
+        self.assertIsNone(segment["finalMs"])
+        self.assertEqual(report["totals"]["rateLimited"], 1)
+        self.assertEqual(report["totals"]["failed"], 1)
 
 
 if __name__ == "__main__":

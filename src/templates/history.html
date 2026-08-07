@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Run history</title>
+  <style>
+    body { margin: 0; background: #f5f1e8; color: #182028; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    .panel { background: #fffdf8; border: 1px solid #d9cfbf; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e5dccd; padding: 8px; text-align: left; }
+    a { color: #0f4c5c; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <a href="/">Back to dashboard</a>
+      <h1>Run history</h1>
+      <table>
+        <thead><tr><th>id</th><th>kind</th><th>provider(s)</th><th>status</th><th>created</th></tr></thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+            <td>{{ run.kind }}</td>
+            <td>{{ run.provider or (run.providers|join(", ")) }}</td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.createdAt }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

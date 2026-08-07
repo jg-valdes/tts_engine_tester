@@ -25,6 +25,15 @@ cp .env.example .env   # fill in GEMINI_API_KEY and/or AZURE_SPEECH_KEY
 uv run tts-harness synth --input segments.example.json
 ```
 
+`startTime` and `endTime` can be provided as:
+
+- integer milliseconds, for example `1500`
+- `HH:MM:SS:mmm`, for example `00:00:05.250`
+- `HH:MM:SS:CC` centiseconds, for example `00:00:13:50`
+
+All formats are normalized to milliseconds before fitting, timeline assembly,
+or provider calls.
+
 The default `measure` mode preserves each provider's natural duration. To ask
 Gemini for best-effort timing that more closely fits every segment window, use:
 
@@ -40,6 +49,21 @@ to each window; `GEMINI_TIMING_ATTEMPTS` and `GEMINI_TIMING_TOLERANCE_MS`
 control the quota/precision tradeoff.
 
 See `uv run tts-harness --help` for all commands (`synth`, `variance`, `voices`, `compare`).
+
+For an easier local testing loop, start the web UI:
+
+```bash
+uv run tts-harness web
+```
+
+It opens a local FastAPI app for:
+
+- editing provider and timing settings on top of `.env`
+- masking or revealing API keys
+- loading Gemini voices and probing Azure voices
+- pasting JSON or editing timestamped segments in a table
+- launching synth or compare runs with live progress states
+- browsing saved runs from SQLite and playing track, segment, and attempt audio
 
 Google does not expose a Gemini TTS voice-list endpoint. The harness includes
 the 30 voices documented by Google (last checked 2026-08-07), so they can be
@@ -70,5 +94,5 @@ The repository pin cannot override an explicitly exported `UV_PYTHON` value.
 
 ## Non-goals
 
-Video muxing, ffmpeg integration, a web UI, production hardening, and
-providers beyond Gemini and Azure.
+Video muxing, ffmpeg integration, production hardening, and providers beyond
+Gemini and Azure.

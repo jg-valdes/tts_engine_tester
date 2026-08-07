@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>tts-harness web</title>
+  <style>
+    :root { color-scheme: light; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f5f1e8; color: #182028; }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .panel { background: #fffdf8; border: 1px solid #d9cfbf; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    label { display: block; font-size: 14px; margin-bottom: 4px; }
+    input, select, textarea, button { font: inherit; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #b9ae9a; border-radius: 10px; background: white; }
+    textarea { min-height: 180px; }
+    button { padding: 10px 14px; border: 0; border-radius: 10px; background: #0f4c5c; color: white; cursor: pointer; }
+    button.secondary { background: #6d6875; }
+    button.ghost { background: #ece5d8; color: #182028; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e5dccd; padding: 8px; text-align: left; vertical-align: top; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .muted { color: #5d6874; font-size: 14px; }
+    .history a { color: #0f4c5c; text-decoration: none; }
+    .tab-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .tab-button { background: #ece5d8; color: #182028; }
+    .tab-button.active { background: #0f4c5c; color: white; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .option-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid #d9cfbf; border-radius: 12px; background: #f4eee3; }
+    .option-card input[type="checkbox"] { width: 20px; height: 20px; margin-top: 2px; flex: 0 0 auto; }
+    .option-title { display: block; font-weight: 600; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>tts-harness web</h1>
+      <p class="muted">Local UI over the existing harness. Presets live in SQLite. Secrets default to <code>.env</code> and can be shown or overridden for a run.</p>
+    </div>
+
+    <form class="panel" method="post" action="/runs" id="run-form">
+      <div class="panel">
+        <h2>Preset config profiles</h2>
+        <p class="muted">Load a saved non-secret profile first, then adjust tabs below for this run.</p>
+        <div class="grid">
+          <div>
+            <label for="preset_name">Preset</label>
+            <select id="preset_name" name="preset_name">
+              <option value="">Env defaults</option>
+              {% for preset in presets %}
+              <option value="{{ preset.name }}">{{ preset.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="preset_save_name">Save current config as</label>
+            <input id="preset_save_name" placeholder="Preset name">
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" class="secondary" id="save-preset">Save current non-secret config</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="tab-row">
+          <button type="button" class="tab-button active" data-tab="main-config">Main config</button>
+          <button type="button" class="tab-button" data-tab="gemini-config">Gemini</button>
+          <button type="button" class="tab-button" data-tab="azure-config">Azure</button>
+        </div>
+
+        <div class="tab-panel active" data-tab-panel="main-config">
+          <h2>Main config</h2>
+          <div class="grid">
+            <div>
+              <label for="mode">Run mode</label>
+              <select id="mode" name="mode">
+                <option value="synth">Synth</option>
+                <option value="compare">Compare Gemini vs Azure</option>
+              </select>
+            </div>
+            <div>
+              <label for="provider">Synth provider</label>
+              <select id="provider" name="provider">
+                <option value="gemini" {% if settings.provider == "gemini" %}selected{% endif %}>Gemini</option>
+                <option value="azure" {% if settings.provider == "azure" %}selected{% endif %}>Azure</option>
+              </select>
+            </div>
+            <div>
+              <label for="fit_mode">Fit mode</label>
+              <select id="fit_mode" name="fit_mode">
+                <option value="measure" {% if settings.fit_mode == "measure" %}selected{% endif %}>measure</option>
+                <option value="constrain" {% if settings.fit_mode == "constrain" %}selected{% endif %}>constrain</option>
+              </select>
+            </div>
+            <div>
+              <label for="output_dir">Output directory</label>
+              <input id="output_dir" name="output_dir" value="{{ settings.output_dir }}">
+            </div>
+            <div>
+              <label for="web_db_path">SQLite path</label>
+              <input id="web_db_path" name="web_db_path" value="{{ settings.web_db_path }}">
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="gemini-config">
+          <h2>Gemini</h2>
+          <div class="grid">
+            <div>
+              <label for="gemini_api_key">Gemini API key</label>
+              <div class="actions">
+                <input type="password" id="gemini_api_key" name="gemini_api_key" value="{{ settings.gemini_api_key }}">
+                <button type="button" class="ghost" data-toggle="gemini_api_key">Show</button>
+              </div>
+            </div>
+            <div>
+              <label for="gemini_model">Model</label>
+              <input id="gemini_model" name="gemini_model" value="{{ settings.gemini_model }}">
+            </div>
+            <div>
+              <label for="gemini_voice">Voice</label>
+              <select id="gemini_voice" name="gemini_voice">
+                {% for voice in gemini_voices %}
+                <option value="{{ voice.name }}" {% if settings.gemini_voice == voice.name %}selected{% endif %}>{{ voice.name }}{% if voice.description %} - {{ voice.description }}{% endif %}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label for="gemini_base_url">Base URL</label>
+              <input id="gemini_base_url" name="gemini_base_url" value="{{ settings.gemini_base_url }}">
+            </div>
+            <div>
+              <label for="gemini_timing_attempts">Timing attempts</label>
+              <input id="gemini_timing_attempts" name="gemini_timing_attempts" type="number" min="1" value="{{ settings.gemini_timing_attempts }}">
+            </div>
+            <div>
+              <label for="gemini_timing_tolerance_ms">Timing tolerance ms</label>
+              <input id="gemini_timing_tolerance_ms" name="gemini_timing_tolerance_ms" type="number" min="0" value="{{ settings.gemini_timing_tolerance_ms }}">
+            </div>
+          </div>
+          <label for="gemini_style_prompt">Style prompt</label>
+          <textarea id="gemini_style_prompt" name="gemini_style_prompt">{{ settings.gemini_style_prompt }}</textarea>
+        </div>
+
+        <div class="tab-panel" data-tab-panel="azure-config">
+          <h2>Azure</h2>
+          <div class="grid">
+            <div>
+              <label for="azure_speech_key">Azure speech key</label>
+              <div class="actions">
+                <input type="password" id="azure_speech_key" name="azure_speech_key" value="{{ settings.azure_speech_key }}">
+                <button type="button" class="ghost" data-toggle="azure_speech_key">Show</button>
+              </div>
+            </div>
+            <div>
+              <label for="azure_speech_region">Region</label>
+              <input id="azure_speech_region" name="azure_speech_region" value="{{ settings.azure_speech_region }}">
+            </div>
+            <div>
+              <label for="azure_voice">Voice</label>
+              <div class="actions">
+                <input id="azure_voice" name="azure_voice" value="{{ settings.azure_voice }}">
+                <button type="button" class="secondary" id="load-azure-voices">Load voices</button>
+              </div>
+              <div id="azure-voice-status" class="muted"></div>
+            </div>
+            <div>
+              <label for="azure_output_format">Output format</label>
+              <input id="azure_output_format" name="azure_output_format" value="{{ settings.azure_output_format }}">
+            </div>
+            <div>
+              <label for="azure_style">Style</label>
+              <input id="azure_style" name="azure_style" value="{{ settings.azure_style }}">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Segments</h2>
+        <p class="muted">Edit in the table or paste the JSON directly. <code>startTime</code> and <code>endTime</code> accept integer milliseconds, <code>HH:MM:SS:mmm</code>, or <code>HH:MM:SS:CC</code> centiseconds.</p>
+        <div class="actions">
+          <button type="button" class="ghost" id="sync-from-json">Load table from JSON</button>
+          <button type="button" class="ghost" id="add-row">Add row</button>
+        </div>
+        <table id="segment-table">
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>startTime</th>
+              <th>endTime</th>
+              <th>description</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <label for="segments_json">Segments JSON</label>
+        <textarea id="segments_json" name="segments_json">{{ sample_segments }}</textarea>
+      </div>
+
+      <div class="panel">
+        <div class="option-card">
+          <input id="no_cache" type="checkbox" name="no_cache">
+          <label for="no_cache">
+            <span class="option-title">Disable cache for this run</span>
+            <span class="muted">Force fresh provider renders instead of reusing matching cached audio. Use this when you want to measure new attempts even if the text and config are unchanged.</span>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Start run</button>
+          <a href="/history"><button type="button" class="ghost">History</button></a>
+        </div>
+      </div>
+    </form>
+
+    <div class="panel history">
+      <h2>Recent runs</h2>
+      <table>
+        <thead><tr><th>id</th><th>kind</th><th>status</th><th>created</th></tr></thead>
+        <tbody>
+          {% for run in history %}
+          <tr>
+            <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+            <td>{{ run.kind }}</td>
+            <td>{{ run.status }}</td>
+            <td>{{ run.createdAt }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const presetMap = {{ presets|tojson }};
+    const segmentsJson = document.getElementById("segments_json");
+    const tableBody = document.querySelector("#segment-table tbody");
+    const providerSelect = document.getElementById("provider");
+
+    function activateTab(tabName) {
+      document.querySelectorAll("[data-tab]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.tab === tabName);
+      });
+      document.querySelectorAll("[data-tab-panel]").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.tabPanel === tabName);
+      });
+    }
+
+    function makeRow(segment) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input data-field="id" value="${segment.id || ""}"></td>
+        <td><input data-field="startTime" value="${segment.startTime ?? 0}"></td>
+        <td><input data-field="endTime" value="${segment.endTime ?? 0}"></td>
+        <td><textarea data-field="description">${segment.description || ""}</textarea></td>
+        <td><button type="button" class="ghost remove-row">Remove</button></td>
+      `;
+      tr.querySelector(".remove-row").addEventListener("click", () => {
+        tr.remove();
+        syncJsonFromTable();
+      });
+      tr.querySelectorAll("input, textarea").forEach((input) => input.addEventListener("input", syncJsonFromTable));
+      return tr;
+    }
+
+    function syncTableFromJson() {
+      let payload;
+      try {
+        payload = JSON.parse(segmentsJson.value);
+      } catch (error) {
+        alert("Segments JSON is invalid");
+        return;
+      }
+      tableBody.innerHTML = "";
+      (payload.segments || []).forEach((segment) => tableBody.appendChild(makeRow(segment)));
+      if (!payload.segments || !payload.segments.length) {
+        tableBody.appendChild(makeRow({id: "s1", startTime: 0, endTime: 3000, description: ""}));
+      }
+    }
+
+    function syncJsonFromTable() {
+      const segments = Array.from(tableBody.querySelectorAll("tr")).map((row) => {
+        const data = {};
+        row.querySelectorAll("[data-field]").forEach((input) => {
+          data[input.dataset.field] = input.value;
+        });
+        return data;
+      });
+      segmentsJson.value = JSON.stringify({segments}, null, 2);
+    }
+
+    document.querySelectorAll("[data-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const input = document.getElementById(button.dataset.toggle);
+        const hidden = input.type === "password";
+        input.type = hidden ? "text" : "password";
+        button.textContent = hidden ? "Hide" : "Show";
+      });
+    });
+
+    document.querySelectorAll("[data-tab]").forEach((button) => {
+      button.addEventListener("click", () => activateTab(button.dataset.tab));
+    });
+
+    function syncProviderTab() {
+      if (providerSelect.value === "azure") {
+        activateTab("azure-config");
+        return;
+      }
+      if (providerSelect.value === "gemini") {
+        activateTab("gemini-config");
+      }
+    }
+
+    providerSelect.addEventListener("change", syncProviderTab);
+
+    document.getElementById("sync-from-json").addEventListener("click", syncTableFromJson);
+    document.getElementById("add-row").addEventListener("click", () => {
+      tableBody.appendChild(makeRow({id: "", startTime: 0, endTime: 0, description: ""}));
+      syncJsonFromTable();
+    });
+
+    document.getElementById("preset_name").addEventListener("change", (event) => {
+      const preset = presetMap.find((item) => item.name === event.target.value);
+      if (!preset) return;
+      Object.entries(preset.config).forEach(([key, value]) => {
+        const field = document.getElementById(key);
+        if (field) field.value = value;
+      });
+    });
+
+    document.getElementById("save-preset").addEventListener("click", async () => {
+      const name = document.getElementById("preset_save_name").value.trim();
+      if (!name) {
+        alert("Preset name is required");
+        return;
+      }
+      const config = {};
+      document.querySelectorAll("#run-form input, #run-form select, #run-form textarea").forEach((field) => {
+        if (!field.name || !field.id) return;
+        config[field.name] = field.type === "checkbox" ? field.checked : field.value;
+      });
+      const response = await fetch("/api/presets", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name, config}),
+      });
+      if (!response.ok) {
+        alert("Failed to save preset");
+        return;
+      }
+      window.location.reload();
+    });
+
+    document.getElementById("load-azure-voices").addEventListener("click", async () => {
+      const response = await fetch("/api/providers/azure/voices", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          azure_speech_key: document.getElementById("azure_speech_key").value,
+          azure_speech_region: document.getElementById("azure_speech_region").value,
+          azure_output_format: document.getElementById("azure_output_format").value,
+          azure_voice: document.getElementById("azure_voice").value,
+        }),
+      });
+      const payload = await response.json();
+      const status = document.getElementById("azure-voice-status");
+      if (payload.error) {
+        status.textContent = payload.error;
+        return;
+      }
+      const names = payload.voices.map((voice) => voice.name).slice(0, 20);
+      status.textContent = names.length ? `Loaded ${payload.voices.length} voices. First: ${names.join(", ")}` : "No voices returned";
+    });
+
+    document.getElementById("run-form").addEventListener("submit", syncJsonFromTable);
+    syncTableFromJson();
+    syncProviderTab();
+  </script>
+</body>
+</html>
