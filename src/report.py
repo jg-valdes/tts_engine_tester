@@ -36,6 +36,7 @@ def build_totals(settings, segments: list[dict], collisions: list[dict], track_d
             1 for s in segments if s.get("finalFit", s.get("fit")) == "OVERFLOW"
         ),
         "failed": sum(1 for s in segments if s.get("error")),
+        "rateLimited": sum(1 for s in segments if s.get("rateLimited")),
         "collisions": len(collisions),
         "billed": billed,
         "estimatedCostUsd": estimate_cost_usd(settings, billed),

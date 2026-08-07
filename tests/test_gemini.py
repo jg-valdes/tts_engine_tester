@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from src.config import Settings
+from src.providers.base import ProviderRateLimitError
 from src.providers.gemini import GeminiProvider
 
 
@@ -121,6 +122,18 @@ class GeminiProviderTests(unittest.TestCase):
         self.assertEqual(voices[0].description, "Bright")
         self.assertIn("Charon", {voice.name for voice in voices})
         self.assertEqual(voices[-1].name, "Sulafat")
+
+    def test_rate_limit_is_not_retried(self):
+        class RateLimitError(Exception):
+            status_code = 429
+
+        create = Mock(side_effect=RateLimitError("too many requests"))
+        self.provider._client = SimpleNamespace(interactions=SimpleNamespace(create=create))
+
+        with self.assertRaises(ProviderRateLimitError):
+            self.provider.synthesize("Exact transcript.")
+
+        create.assert_called_once()
 
 
 if __name__ == "__main__":

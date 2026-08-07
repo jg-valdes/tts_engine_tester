@@ -4,7 +4,7 @@
 
 Build a standalone Python CLI tool for evaluating text-to-speech providers on **timed segments** — text that must be spoken within a fixed time window.
 
-The tool takes a list of segments (`startTime`, `endTime`, `description` in milliseconds), synthesizes each one, places them on a timeline, and reports how well each fit its window.
+The tool takes a list of segments (`startTime`, `endTime`, `description`), synthesizes each one, places them on a timeline, and reports how well each fit its window.
 
 Two providers must be supported: **Google Gemini TTS** and **Microsoft Azure AI Speech**.
 
@@ -158,7 +158,9 @@ LOG_LEVEL=INFO
 }
 ```
 
-All times in milliseconds. `id` is optional — generate one if absent.
+`startTime` and `endTime` accept integer milliseconds, `HH:MM:SS:mmm`, or
+`HH:MM:SS:CC` centiseconds. Normalize them to integer milliseconds at input
+load time. `id` is optional — generate one if absent.
 
 ## Commands
 
@@ -187,6 +189,9 @@ uv run tts-harness voices --provider azure
 uv run tts-harness compare --input segments.json \
     --provider gemini --provider azure \
     --out ./out/compare-1
+
+# Local browser UI for iterative testing
+uv run tts-harness web
 ```
 
 Add `--no-cache` to force fresh renders and `--dry-run` to print the fully resolved config and the exact payload (SSML or prompt) without making a call.
@@ -373,9 +378,24 @@ Print a compact table as the run proceeds — id, target, actual, ratio, fit, ca
 9. `--dry-run` prints the resolved config and the exact payload without making a call.
 10. Unit tests cover WAV header parsing and writing, RIFF-header stripping, duration measurement, byte-offset placement, word-budget calculation, and SSML escaping. Assembly and SSML tests must not require network access.
 
+## Local web UI
+
+Add a local-only browser UI on top of the same orchestration used by the CLI.
+It should:
+
+- render defaults from `.env`
+- allow temporary per-run overrides in the UI
+- persist non-secret presets and run history in SQLite
+- mask secrets by default with a show/hide toggle
+- let the user launch `synth` and `compare` jobs
+- expose live progress states while runs are active, including waiting on a provider response
+- play `track.wav`, per-segment WAVs, and saved attempt WAVs
+
+This remains an evaluation tool, not a multi-user service.
+
 ## Non-goals
 
-Video muxing, ffmpeg integration, a web UI, production hardening, and providers beyond these two. Keep the surface small.
+Video muxing, ffmpeg integration, production hardening, and providers beyond these two. Keep the surface small.
 
 ## Optional stretch
 

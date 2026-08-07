@@ -6,11 +6,27 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class ProviderRateLimitError(RuntimeError):
+    def __init__(self, provider: str, message: str):
+        super().__init__(message)
+        self.provider = provider
+
+
 @dataclass
 class Voice:
     name: str
     locale: str | None = None
     description: str | None = None
+
+
+@dataclass
+class AttemptTrace:
+    pcm: bytes
+    duration_ms: int
+    billed_units: dict
+    request_payload: str
+    target_ms: int | None = None
+    duration_constrained: bool = False
 
 
 @dataclass
@@ -20,6 +36,7 @@ class SynthesisResult:
     duration_constrained: bool
     billed_units: dict
     request_payload: str
+    attempts: list[AttemptTrace] | None = None
 
 
 class Provider(Protocol):

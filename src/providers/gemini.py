@@ -10,10 +10,10 @@ from google import genai
 from google.genai import types
 
 from ..audio import strip_riff_header
-from .base import SynthesisResult, Voice
+from .base import AttemptTrace, ProviderRateLimitError, SynthesisResult, Voice
 
 _MAX_RETRIES = 5
-_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_RETRYABLE_STATUS = {500, 502, 503, 504}
 
 # Google does not provide a voice-list endpoint. This snapshot is the complete
 # prebuilt voice set documented at https://ai.google.dev/gemini-api/docs/speech-generation
@@ -129,6 +129,7 @@ class GeminiProvider:
         best: SynthesisResult | None = None
         total_input_tokens = 0
         total_output_audio_tokens = 0
+        attempt_traces: list[AttemptTrace] = []
 
         for _ in range(attempts):
             request_body = self._request_body(
@@ -140,6 +141,10 @@ class GeminiProvider:
             input_tokens, output_audio_tokens = self._extract_usage(response)
             total_input_tokens += input_tokens
             total_output_audio_tokens += output_audio_tokens
+            billed_units = {
+                "input_tokens": input_tokens,
+                "output_audio_tokens": output_audio_tokens,
+            }
             duration_ms = (
                 len(pcm)
                 * 1000
@@ -153,8 +158,18 @@ class GeminiProvider:
                 pcm=pcm,
                 duration_ms=duration_ms,
                 duration_constrained=False,
-                billed_units={},
+                billed_units=billed_units,
                 request_payload=json.dumps(request_body, ensure_ascii=False, sort_keys=True),
+            )
+            attempt_traces.append(
+                AttemptTrace(
+                    pcm=pcm,
+                    duration_ms=duration_ms,
+                    billed_units=billed_units,
+                    request_payload=result.request_payload,
+                    target_ms=target_ms,
+                    duration_constrained=False,
+                )
             )
             if best is None or (
                 target_ms is not None
@@ -172,6 +187,7 @@ class GeminiProvider:
             "input_tokens": total_input_tokens,
             "output_audio_tokens": total_output_audio_tokens,
         }
+        best.attempts = attempt_traces
         return best
 
     def _create_interaction(self, request_body: dict):
@@ -180,6 +196,11 @@ class GeminiProvider:
                 return self.client.interactions.create(**request_body)
             except Exception as exc:  # google-genai raises provider-specific errors
                 status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+                if status == 429:
+                    raise ProviderRateLimitError(
+                        self.name,
+                        "Gemini rate limit reached (HTTP 429); segment marked as rate limited",
+                    ) from exc
                 if attempt == _MAX_RETRIES - 1 or (status is not None and status not in _RETRYABLE_STATUS):
                     raise
                 time.sleep(2**attempt)

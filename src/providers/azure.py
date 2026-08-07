@@ -8,7 +8,7 @@ from xml.sax.saxutils import escape
 import httpx
 
 from ..audio import strip_riff_header
-from .base import SynthesisResult, Voice
+from .base import AttemptTrace, SynthesisResult, Voice
 
 _MAX_RETRIES = 5
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -80,6 +80,16 @@ class AzureProvider:
             duration_constrained=constrained,
             billed_units={"characters": len(ssml)},
             request_payload=ssml,
+            attempts=[
+                AttemptTrace(
+                    pcm=pcm,
+                    duration_ms=duration_ms,
+                    billed_units={"characters": len(ssml)},
+                    request_payload=ssml,
+                    target_ms=target_ms,
+                    duration_constrained=constrained,
+                )
+            ],
         )
 
     def list_voices(self) -> list[Voice]:

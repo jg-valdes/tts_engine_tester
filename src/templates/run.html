@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ run.id }}</title>
+  <style>
+    body { margin: 0; background: #f5f1e8; color: #182028; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+    main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .panel { background: #fffdf8; border: 1px solid #d9cfbf; border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid #e5dccd; padding: 8px; text-align: left; vertical-align: top; }
+    code, pre { white-space: pre-wrap; word-break: break-word; }
+    .muted { color: #5d6874; }
+    a { color: #0f4c5c; }
+    details { margin-top: 8px; }
+    progress { width: 100%; height: 16px; }
+    .code-card { background: #f4eee3; border: 1px solid #d9cfbf; border-radius: 10px; padding: 12px; margin-top: 10px; }
+    .code-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+    .copy-button { padding: 6px 10px; border: 0; border-radius: 8px; background: #6d6875; color: white; cursor: pointer; }
+    .audio-block { display: grid; gap: 6px; }
+    .badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+    .badge-natural { background: #d9f2e3; color: #14532d; }
+    .badge-tight { background: #fff1c7; color: #854d0e; }
+    .badge-overflow { background: #fde2e1; color: #991b1b; }
+    .badge-rate-limit { background: #eadcff; color: #5b21b6; }
+    .badge-error { background: #e5e7eb; color: #374151; }
+  </style>
+</head>
+<body>
+  <main>
+    {% set final_state = run.status in ["completed", "failed"] %}
+    <div class="panel">
+      <a href="/">New run</a> · <a href="/history">History</a>
+      <h1>{{ run.id }}</h1>
+      <p class="muted">{{ run.kind }} · {{ run.status }}</p>
+      <div id="progress-block">
+        <strong id="progress-state">{{ run.progress.state if run.progress else run.status }}</strong>
+        <div id="progress-message">{{ run.progress.message if run.progress else run.message }}</div>
+        <progress id="progress-bar" max="100" value="0"></progress>
+      </div>
+    </div>
+
+    {% if run.totals %}
+    <div class="panel">
+      <h2>Totals</h2>
+      <div class="grid">
+        {% for key, value in run.totals.items() %}
+        <div><strong>{{ key }}</strong><br>{{ value }}</div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="panel">
+      <h2>Events</h2>
+      <ul id="event-list">
+        {% for event in run.events %}
+        <li>{{ event.createdAt }} · {{ event.state }} · {{ event.message }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    {% if final_state and run.kind == "compare" %}
+    <div class="panel">
+      <h2>Compare children</h2>
+      <table>
+        <thead><tr><th>provider</th><th>status</th><th>link</th></tr></thead>
+        <tbody>
+          {% for child in run.children %}
+          <tr>
+            <td>{{ child.provider }}</td>
+            <td>{{ child.status }}</td>
+            <td><a href="/runs/{{ child.id }}">open</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if run.comparisonPath %}
+      <p><a href="/media/{{ run.id }}/comparison.json">comparison.json</a></p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if final_state and run.kind == "synth" and run.outputDir %}
+    <div class="panel">
+      <h2>Full track output</h2>
+      <p class="muted">This is the final assembled timeline, including silence before and between segments as required by their absolute timestamps.</p>
+      <audio controls preload="none" src="/media/{{ run.id }}/track.wav"></audio>
+      <p><a href="/media/{{ run.id }}/report.json">report.json</a></p>
+    </div>
+    {% endif %}
+
+    {% if final_state and run.segments %}
+    <div class="panel">
+      <h2>Segments</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>target</th>
+            <th>natural</th>
+            <th>final</th>
+            <th>fit</th>
+            <th>audio</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for segment in run.segments %}
+          <tr>
+            <td>{{ segment.id }}</td>
+            <td>{{ segment.targetMs }}</td>
+            <td>{{ segment.naturalMs }}</td>
+            <td>{{ segment.finalMs }}</td>
+            <td>
+              {% set fit_value = segment.finalFit or segment.fit %}
+              {% if fit_value == "NATURAL" %}
+              <span class="badge badge-natural">NATURAL</span>
+              {% elif fit_value == "TIGHT" %}
+              <span class="badge badge-tight">TIGHT</span>
+              {% elif fit_value == "OVERFLOW" %}
+              <span class="badge badge-overflow">OVERFLOW</span>
+              {% elif fit_value == "RATE_LIMIT" %}
+              <span class="badge badge-rate-limit">RATE LIMIT</span>
+              {% else %}
+              <span class="badge badge-error">{{ fit_value or "ERROR" }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if segment.file %}
+              <div class="audio-block">
+                <strong>Final segment render</strong>
+                <audio controls preload="none" src="/media/{{ run.id }}/{{ segment.file }}"></audio>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td colspan="6">
+              <details>
+                <summary>Attempts, payloads, and debug artifacts</summary>
+                {% if segment.error %}
+                <p>{{ segment.error }}</p>
+                {% endif %}
+                {% for attempt in segment.attempts %}
+                <div class="panel">
+                  <strong>
+                    {% if attempt.phase == "natural" %}
+                    Natural render attempt #{{ attempt.ordinal }}
+                    {% else %}
+                    Targeted render attempt #{{ attempt.ordinal }}
+                    {% endif %}
+                  </strong>
+                  <span class="muted">
+                    isolated segment audio, actual {{ attempt.actualMs }} ms{% if attempt.targetMs %}, target {{ attempt.targetMs }} ms{% endif %}{% if attempt.selected %}, selected for the final segment output{% endif %}
+                  </span>
+                  <div class="audio-block">
+                    {% if attempt.file %}
+                    <strong>Attempt audio</strong>
+                    <audio controls preload="none" src="/media/{{ run.id }}/{{ attempt.file }}"></audio>
+                    {% endif %}
+                  </div>
+                  <div class="code-card">
+                    <div class="code-head">
+                      <strong>Request payload</strong>
+                      <button type="button" class="copy-button" data-copy-target="payload-{{ segment.id }}-{{ attempt.phase }}-{{ attempt.ordinal }}">Copy</button>
+                    </div>
+                    <pre><code id="payload-{{ segment.id }}-{{ attempt.phase }}-{{ attempt.ordinal }}">{{ attempt.requestPayload }}</code></pre>
+                  </div>
+                </div>
+                {% endfor %}
+              </details>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if final_state and (run.inputPayload or run.resolvedConfig) %}
+    <div class="panel">
+      <h2>Run inputs</h2>
+      {% if run.inputPayload %}
+      <div class="code-card">
+        <div class="code-head">
+          <strong>Input segments JSON</strong>
+          <button type="button" class="copy-button" data-copy-target="input-payload">Copy</button>
+        </div>
+        <pre><code id="input-payload">{{ run.inputPayload|tojson(indent=2) }}</code></pre>
+      </div>
+      {% endif %}
+      {% if run.resolvedConfig %}
+      <div class="code-card">
+        <div class="code-head">
+          <strong>Resolved config JSON</strong>
+          <button type="button" class="copy-button" data-copy-target="resolved-config">Copy</button>
+        </div>
+        <pre><code id="resolved-config">{{ run.resolvedConfig|tojson(indent=2) }}</code></pre>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </main>
+
+  <script>
+    const runId = {{ run.id|tojson }};
+    const finalStates = new Set(["completed", "failed"]);
+    const progressState = document.getElementById("progress-state");
+    const progressMessage = document.getElementById("progress-message");
+    const progressBar = document.getElementById("progress-bar");
+    const eventList = document.getElementById("event-list");
+
+    function setProgress(payload) {
+      progressState.textContent = payload.state || "running";
+      progressMessage.textContent = payload.message || "";
+      if (payload.totalSegments && payload.currentSegmentIndex) {
+        progressBar.value = Math.round(payload.currentSegmentIndex / payload.totalSegments * 100);
+      } else if (payload.state === "completed") {
+        progressBar.value = 100;
+      }
+    }
+
+    async function refresh() {
+      const statusResponse = await fetch(`/api/runs/${runId}/status`);
+      if (!statusResponse.ok) return;
+      const status = await statusResponse.json();
+      setProgress(status);
+
+      const eventsResponse = await fetch(`/api/runs/${runId}/events`);
+      if (eventsResponse.ok) {
+        const events = await eventsResponse.json();
+        eventList.innerHTML = "";
+        events.forEach((event) => {
+          const li = document.createElement("li");
+          li.textContent = `${event.createdAt} · ${event.state} · ${event.message || ""}`;
+          eventList.appendChild(li);
+        });
+      }
+
+      if (!finalStates.has(status.state)) {
+        window.setTimeout(refresh, 1000);
+      } else {
+        window.location.reload();
+      }
+    }
+
+    setProgress({{ (run.progress or {"state": run.status, "message": run.message})|tojson }});
+    if (!finalStates.has(progressState.textContent)) {
+      window.setTimeout(refresh, 1000);
+    }
+
+    document.querySelectorAll("[data-copy-target]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const target = document.getElementById(button.dataset.copyTarget);
+        if (!target) return;
+        await navigator.clipboard.writeText(target.textContent || "");
+        const previous = button.textContent;
+        button.textContent = "Copied";
+        window.setTimeout(() => {
+          button.textContent = previous;
+        }, 1000);
+      });
+    });
+  </script>
+</body>
+</html>
