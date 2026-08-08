@@ -2,9 +2,9 @@
 
 ## Objective
 
-Build a standalone Python CLI tool for evaluating text-to-speech providers on **timed segments** — text that must be spoken within a fixed time window.
+Build a standalone Python CLI tool for evaluating text-to-speech providers on **timed segments** — text that must be spoken within a fixed time window — plus **single ad-hoc text samples** for quick natural or targeted test renders.
 
-The tool takes a list of segments (`startTime`, `endTime`, `description`), synthesizes each one, places them on a timeline, and reports how well each fit its window.
+The tool takes either a list of segments (`startTime`, `endTime`, `description`) or one ad-hoc text sample, synthesizes it, places the audio on a timeline when needed, and reports how well each segment fit its window when timing applies.
 
 Two providers must be supported: **Google Gemini TTS** and **Microsoft Azure AI Speech**.
 
@@ -179,6 +179,9 @@ uv run tts-harness synth --input segments.json --provider gemini \
 # Single ad-hoc sentence, no file needed
 uv run tts-harness synth --text "A woman crosses the street." --duration 3400 --provider azure
 
+# Single ad-hoc sentence, natural duration with no target window
+uv run tts-harness synth --text "A woman crosses the street." --provider gemini
+
 # Consistency check: same text N times, report duration variance
 uv run tts-harness variance --text "A woman crosses the street." --repeat 5 --provider gemini
 
@@ -196,7 +199,20 @@ uv run tts-harness web
 
 Add `--no-cache` to force fresh renders and `--dry-run` to print the fully resolved config and the exact payload (SSML or prompt) without making a call.
 
+For `synth --text`, `--duration` is optional. When omitted, the run is treated
+as untimed: the segment starts at `0`, no target fit is enforced, and the
+resulting track length follows the actual generated audio duration.
+
 `compare` is the most important command. It must produce per-provider output directories plus a single top-level `comparison.json` aligning the same segment across providers side by side.
+
+The local web UI must expose both input paths:
+
+- timestamped segments, via table editor or raw JSON
+- a single text sample, with an optional target duration in milliseconds
+
+If a preset is selected in the web UI, starting a run should auto-save the
+current non-secret config back into that preset before the run is submitted, so
+the next dashboard visit reuses the latest preset state.
 
 ## Provider specifics
 

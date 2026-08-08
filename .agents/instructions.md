@@ -1,8 +1,8 @@
 # Agent instructions — tts-harness
 
 This repo is a standalone Python CLI for evaluating TTS providers (Gemini,
-Azure) on timed segments. It is an evaluation tool, not a production
-service.
+Azure) on timed segments and ad-hoc single-text samples. It is an evaluation
+tool, not a production service.
 
 ## Dependencies: uv only
 
@@ -19,9 +19,10 @@ This repo uses **uv** for dependency management. Do not use bare `pip` or
 
 `docs/source.md` is the authoritative design/spec document for this
 project — provider interface, configuration precedence, fitting rules,
-caching, timeline assembly, output format, and acceptance criteria all
-live there. Read it before implementing or changing provider, CLI, or
-report behavior. This file only covers meta/contribution conventions.
+caching, timeline assembly, web input modes, output format, and acceptance
+criteria all live there. Read it before implementing or changing provider,
+CLI, web, or report behavior. This file only covers meta/contribution
+conventions.
 
 ## Local scratch space
 
