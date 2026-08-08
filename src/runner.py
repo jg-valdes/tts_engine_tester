@@ -317,6 +317,8 @@ def run_synth(
 
     for index, seg in enumerate(segments, start=1):
         target_ms = seg.end_time - seg.start_time
+        if target_ms <= 0:
+            target_ms = None
         row: dict = {
             "id": seg.id,
             "text": seg.description,

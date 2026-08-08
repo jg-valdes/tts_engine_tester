@@ -1,9 +1,9 @@
 # tts-harness
 
 A standalone Python CLI for evaluating text-to-speech providers on **timed
-segments** — text that must be spoken within a fixed time window. It
-synthesizes each segment, places the audio on a timeline, and reports how
-well each fit its window.
+segments** and **single ad-hoc text samples**. It synthesizes each segment,
+places the audio on a timeline, and reports how well each fit its window when
+timing applies.
 
 Two providers are supported: **Google Gemini TTS** and **Microsoft Azure AI
 Speech**, both measured and reported through identical harness code so
@@ -23,6 +23,7 @@ available, so a separate Python installation is not required.
 uv sync
 cp .env.example .env   # fill in GEMINI_API_KEY and/or AZURE_SPEECH_KEY
 uv run tts-harness synth --input segments.example.json
+uv run tts-harness synth --text "Short sample line"
 ```
 
 `startTime` and `endTime` can be provided as:
@@ -48,6 +49,14 @@ In constrain mode the harness tries targeted renders and keeps the one closest
 to each window; `GEMINI_TIMING_ATTEMPTS` and `GEMINI_TIMING_TOLERANCE_MS`
 control the quota/precision tradeoff.
 
+For a single ad-hoc sample you can either set a target window or omit it for a
+free natural-duration call:
+
+```bash
+uv run tts-harness synth --text "A woman crosses the street." --duration 3400 --provider azure
+uv run tts-harness synth --text "A woman crosses the street." --provider gemini
+```
+
 See `uv run tts-harness --help` for all commands (`synth`, `variance`, `voices`, `compare`).
 
 For an easier local testing loop, start the web UI:
@@ -62,7 +71,9 @@ It opens a local FastAPI app for:
 - masking or revealing API keys
 - loading Gemini voices and probing Azure voices
 - pasting JSON or editing timestamped segments in a table
+- switching between timestamped segments and a single text sample
 - launching synth or compare runs with live progress states
+- auto-saving the currently selected preset when a run starts
 - browsing saved runs from SQLite and playing track, segment, and attempt audio
 
 Google does not expose a Gemini TTS voice-list endpoint. The harness includes

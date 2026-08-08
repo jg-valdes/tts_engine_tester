@@ -31,6 +31,8 @@
     .option-title { display: block; font-weight: 600; margin-bottom: 4px; }
     .inline-option { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
     .inline-option input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
+    .input-panel { display: none; }
+    .input-panel.active { display: block; }
   </style>
 </head>
 <body>
@@ -43,7 +45,7 @@
     <form class="panel" method="post" action="/runs" id="run-form">
       <div class="panel">
         <h2>Preset config profiles</h2>
-        <p class="muted">Load a saved non-secret profile first, then adjust tabs below for this run.</p>
+        <p class="muted">Load a saved non-secret profile first, then adjust tabs below for this run. If a preset is selected, starting a run auto-saves the current non-secret config back into that preset.</p>
         <div class="grid">
           <div>
             <label for="preset_name">Preset</label>
@@ -79,6 +81,13 @@
               <select id="mode" name="mode">
                 <option value="synth">Synth</option>
                 <option value="compare">Compare Gemini vs Azure</option>
+              </select>
+            </div>
+            <div>
+              <label for="input_type">Input type</label>
+              <select id="input_type" name="input_type">
+                <option value="segments">Timestamped segments</option>
+                <option value="single_text">Single text sample</option>
               </select>
             </div>
             <div>
@@ -189,26 +198,44 @@
       </div>
 
       <div class="panel">
-        <h2>Segments</h2>
-        <p class="muted">Edit in the table or paste the JSON directly. <code>startTime</code> and <code>endTime</code> accept integer milliseconds, <code>HH:MM:SS:mmm</code>, or <code>HH:MM:SS:CC</code> centiseconds.</p>
-        <div class="actions">
-          <button type="button" class="ghost" id="sync-from-json">Load table from JSON</button>
-          <button type="button" class="ghost" id="add-row">Add row</button>
+        <div class="input-panel active" data-input-panel="segments">
+          <h2>Segments</h2>
+          <p class="muted">Edit in the table or paste the JSON directly. <code>startTime</code> and <code>endTime</code> accept integer milliseconds, <code>HH:MM:SS:mmm</code>, or <code>HH:MM:SS:CC</code> centiseconds.</p>
+          <div class="actions">
+            <button type="button" class="ghost" id="sync-from-json">Load table from JSON</button>
+            <button type="button" class="ghost" id="add-row">Add row</button>
+          </div>
+          <table id="segment-table">
+            <thead>
+              <tr>
+                <th>id</th>
+                <th>startTime</th>
+                <th>endTime</th>
+                <th>description</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <label for="segments_json">Segments JSON</label>
+          <textarea id="segments_json" name="segments_json">{{ sample_segments }}</textarea>
         </div>
-        <table id="segment-table">
-          <thead>
-            <tr>
-              <th>id</th>
-              <th>startTime</th>
-              <th>endTime</th>
-              <th>description</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <label for="segments_json">Segments JSON</label>
-        <textarea id="segments_json" name="segments_json">{{ sample_segments }}</textarea>
+
+        <div class="input-panel" data-input-panel="single_text">
+          <h2>Single text sample</h2>
+          <p class="muted">Use this when you just want to test one sentence or paragraph. The server will convert it into a single segment starting at 0 ms.</p>
+          <div class="grid">
+            <div style="grid-column: 1 / -1;">
+              <label for="single_text">Text</label>
+              <textarea id="single_text" name="single_text" placeholder="Type one line or paragraph to synthesize"></textarea>
+            </div>
+            <div>
+              <label for="single_duration_ms">Target duration ms (optional)</label>
+              <input id="single_duration_ms" name="single_duration_ms" type="number" min="0" placeholder="Leave blank to use the natural duration">
+              <div class="muted">Leave blank for a free render with no target window. Set a value only when you want to test timing fit.</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="panel">
@@ -246,10 +273,12 @@
 
   <script>
     const presetStorageKey = "tts-harness:selected-preset";
+    const presetDraftStorageKey = "tts-harness:selected-preset-draft";
     const presetMap = {{ presets|tojson }};
     const defaultSettings = {{ settings|tojson }};
     const segmentsJson = document.getElementById("segments_json");
     const tableBody = document.querySelector("#segment-table tbody");
+    const inputTypeSelect = document.getElementById("input_type");
     const providerSelect = document.getElementById("provider");
     const presetSelect = document.getElementById("preset_name");
     const azureVoiceSelect = document.getElementById("azure_voice");
@@ -268,6 +297,12 @@
       if (tabName === "azure-config" && !azureVoicesRequested) {
         requestAzureVoices(false);
       }
+    }
+
+    function syncInputPanels() {
+      document.querySelectorAll("[data-input-panel]").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.inputPanel === inputTypeSelect.value);
+      });
     }
 
     function makeRow(segment) {
@@ -311,6 +346,80 @@
         return data;
       });
       segmentsJson.value = JSON.stringify({segments}, null, 2);
+    }
+
+    function collectCurrentConfig() {
+      const config = {};
+      document.querySelectorAll("#run-form input, #run-form select, #run-form textarea").forEach((field) => {
+        if (!field.name || !field.id) return;
+        config[field.name] = field.type === "checkbox" ? field.checked : field.value;
+      });
+      return config;
+    }
+
+    function savePresetDraft(name, config) {
+      if (!name) {
+        window.localStorage.removeItem(presetDraftStorageKey);
+        return;
+      }
+      window.localStorage.setItem(
+        presetDraftStorageKey,
+        JSON.stringify({name, config})
+      );
+    }
+
+    function loadPresetDraft(name) {
+      if (!name) {
+        return null;
+      }
+      const raw = window.localStorage.getItem(presetDraftStorageKey);
+      if (!raw) {
+        return null;
+      }
+      try {
+        const draft = JSON.parse(raw);
+        if (draft.name !== name || typeof draft.config !== "object" || draft.config === null) {
+          return null;
+        }
+        return draft.config;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function applyFormValues(values) {
+      Object.entries(values).forEach(([key, value]) => {
+        const field = document.getElementById(key);
+        if (!field) return;
+        if (field.type === "checkbox") {
+          field.checked = Boolean(value);
+          return;
+        }
+        field.value = value ?? "";
+        if (field.id === "azure_voice") {
+          field.dataset.currentValue = value ?? "";
+        }
+      });
+    }
+
+    async function savePresetConfig(name, config) {
+      const response = await fetch("/api/presets", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name, config}),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to save preset");
+      }
+      const savedPreset = await response.json();
+      const existingIndex = presetMap.findIndex((item) => item.name === savedPreset.name);
+      if (existingIndex >= 0) {
+        presetMap[existingIndex] = savedPreset;
+      } else {
+        presetMap.push(savedPreset);
+      }
+      savePresetDraft(savedPreset.name, config);
+      return savedPreset;
     }
 
     function filteredAzureVoices() {
@@ -408,6 +517,7 @@
     }
 
     providerSelect.addEventListener("change", syncProviderTab);
+    inputTypeSelect.addEventListener("change", syncInputPanels);
     azureVoiceFilter.addEventListener("change", renderAzureVoiceOptions);
     azureVoiceSelect.addEventListener("change", () => {
       if (azureVoiceSelect.value) {
@@ -423,19 +533,9 @@
 
     document.getElementById("preset_name").addEventListener("change", (event) => {
       const preset = presetMap.find((item) => item.name === event.target.value);
-      const values = preset ? { ...defaultSettings, ...preset.config } : defaultSettings;
-      Object.entries(values).forEach(([key, value]) => {
-        const field = document.getElementById(key);
-        if (!field) return;
-        if (field.type === "checkbox") {
-          field.checked = Boolean(value);
-          return;
-        }
-        field.value = value ?? "";
-        if (field.id === "azure_voice") {
-          field.dataset.currentValue = value ?? "";
-        }
-      });
+      const draft = loadPresetDraft(event.target.value);
+      const values = preset ? { ...defaultSettings, ...preset.config, ...(draft || {}) } : defaultSettings;
+      applyFormValues(values);
       window.localStorage.setItem(presetStorageKey, event.target.value || "");
       renderAzureVoiceOptions();
       syncProviderTab();
@@ -447,17 +547,9 @@
         alert("Preset name is required");
         return;
       }
-      const config = {};
-      document.querySelectorAll("#run-form input, #run-form select, #run-form textarea").forEach((field) => {
-        if (!field.name || !field.id) return;
-        config[field.name] = field.type === "checkbox" ? field.checked : field.value;
-      });
-      const response = await fetch("/api/presets", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({name, config}),
-      });
-      if (!response.ok) {
+      try {
+        await savePresetConfig(name, collectCurrentConfig());
+      } catch (error) {
         alert("Failed to save preset");
         return;
       }
@@ -467,7 +559,25 @@
     document.getElementById("load-azure-voices").addEventListener("click", () => requestAzureVoices(false));
     document.getElementById("refresh-azure-voices").addEventListener("click", () => requestAzureVoices(true));
 
-    document.getElementById("run-form").addEventListener("submit", syncJsonFromTable);
+    document.getElementById("run-form").addEventListener("submit", async (event) => {
+      if (inputTypeSelect.value === "segments") {
+        syncJsonFromTable();
+      }
+      const currentConfig = collectCurrentConfig();
+      if (presetSelect.value) {
+        savePresetDraft(presetSelect.value, currentConfig);
+      }
+      if (!presetSelect.value) {
+        return;
+      }
+      event.preventDefault();
+      try {
+        await savePresetConfig(presetSelect.value, currentConfig);
+      } catch (error) {
+        alert("Run started without updating the selected preset because saving failed.");
+      }
+      event.target.submit();
+    });
     syncTableFromJson();
     renderAzureVoiceOptions();
     const rememberedPreset = window.localStorage.getItem(presetStorageKey);
@@ -475,6 +585,7 @@
       presetSelect.value = rememberedPreset;
       presetSelect.dispatchEvent(new Event("change"));
     }
+    syncInputPanels();
     syncProviderTab();
   </script>
 </body>
