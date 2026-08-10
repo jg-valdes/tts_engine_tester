@@ -27,7 +27,7 @@ from .runner import (
 from .store import RunStore
 
 _SECRET_FIELDS = {"gemini_api_key", "azure_speech_key"}
-_PRESET_FIELDS = {
+_PRESET_SETTING_FIELDS = {
     "provider",
     "gemini_base_url",
     "gemini_model",
@@ -45,7 +45,10 @@ _PRESET_FIELDS = {
     "words_per_second",
     "max_compression_ratio",
     "fit_mode",
+    "output_dir",
+    "web_db_path",
 }
+_PRESET_UI_FIELDS = {"mode", "input_type"}
 _FIELD_TYPES = {field.name: type(field.default) for field in fields(Settings)}
 _AZURE_VOICE_CACHE_TTL_SECONDS = 24 * 60 * 60
 
@@ -107,10 +110,14 @@ def _save_cached_azure_voices(settings: Settings, region: str, voices: list[dict
 
 def _sanitize_preset(payload: dict) -> dict:
     cleaned = {}
-    for name in _PRESET_FIELDS:
+    for name in _PRESET_SETTING_FIELDS:
         coerced = _coerce(name, payload.get(name))
         if coerced is not None:
             cleaned[name] = coerced
+    for name in _PRESET_UI_FIELDS:
+        value = payload.get(name)
+        if value not in (None, ""):
+            cleaned[name] = str(value)
     return cleaned
 
 

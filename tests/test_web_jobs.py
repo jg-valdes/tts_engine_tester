@@ -184,6 +184,49 @@ class WebJobTests(unittest.TestCase):
                     self.assertEqual(second.json()["source"], "cache")
                     self.assertEqual(FakeAzureProvider.calls, 1)
 
+    def test_preset_api_persists_dashboard_fields(self):
+        asyncio.run(self._preset_api_persists_dashboard_fields())
+
+    async def _preset_api_persists_dashboard_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(
+                output_dir=str(Path(temp_dir) / "out"),
+                cache_dir=str(Path(temp_dir) / "cache"),
+                web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+            )
+            app = create_app(settings=settings, store=RunStore(settings.web_db_path))
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post(
+                    "/api/presets",
+                    json={
+                        "name": "Tester preset",
+                        "config": {
+                            "provider": "azure",
+                            "fit_mode": "constrain",
+                            "output_dir": "/tmp/out",
+                            "web_db_path": "/tmp/web.sqlite3",
+                            "mode": "compare",
+                            "input_type": "single_text",
+                            "single_text": "should not persist",
+                        },
+                    },
+                )
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["name"], "Tester preset")
+                self.assertEqual(
+                    payload["config"],
+                    {
+                        "provider": "azure",
+                        "fit_mode": "constrain",
+                        "output_dir": "/tmp/out",
+                        "web_db_path": "/tmp/web.sqlite3",
+                        "mode": "compare",
+                        "input_type": "single_text",
+                    },
+                )
+
     def test_single_text_form_creates_one_segment_run(self):
         asyncio.run(self._single_text_form_creates_one_segment_run())
 
