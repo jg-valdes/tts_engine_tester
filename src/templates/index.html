@@ -276,6 +276,7 @@
     const presetDraftStorageKey = "tts-harness:selected-preset-draft";
     const presetMap = {{ presets|tojson }};
     const defaultSettings = {{ settings|tojson }};
+    const defaultUiState = {mode: "synth", input_type: "segments"};
     const segmentsJson = document.getElementById("segments_json");
     const tableBody = document.querySelector("#segment-table tbody");
     const inputTypeSelect = document.getElementById("input_type");
@@ -403,6 +404,17 @@
       syncInputPanels();
       syncProviderTab();
       renderAzureVoiceOptions();
+    }
+
+    function applySelectedPreset(presetName) {
+      const preset = presetMap.find((item) => item.name === presetName);
+      const draft = loadPresetDraft(presetName);
+      const values = presetName
+        ? { ...defaultSettings, ...defaultUiState, ...(preset ? preset.config : {}), ...(draft || {}) }
+        : { ...defaultSettings, ...defaultUiState };
+      presetSelect.value = presetName;
+      applyFormValues(values);
+      window.localStorage.setItem(presetStorageKey, presetName);
     }
 
     async function savePresetConfig(name, config) {
@@ -535,11 +547,7 @@
     });
 
     document.getElementById("preset_name").addEventListener("change", (event) => {
-      const preset = presetMap.find((item) => item.name === event.target.value);
-      const draft = loadPresetDraft(event.target.value);
-      const values = preset ? { ...defaultSettings, ...preset.config, ...(draft || {}) } : defaultSettings;
-      applyFormValues(values);
-      window.localStorage.setItem(presetStorageKey, event.target.value || "");
+      applySelectedPreset(event.target.value || "");
     });
 
     document.getElementById("save-preset").addEventListener("click", async () => {
@@ -581,13 +589,12 @@
     });
     syncTableFromJson();
     renderAzureVoiceOptions();
-    const rememberedPreset = window.localStorage.getItem(presetStorageKey);
-    if (rememberedPreset !== null) {
-      presetSelect.value = rememberedPreset;
-      presetSelect.dispatchEvent(new Event("change"));
-    } else {
-      applyFormValues(defaultSettings);
+    function restorePresetSelection() {
+      const rememberedPreset = window.localStorage.getItem(presetStorageKey);
+      applySelectedPreset(rememberedPreset ?? "");
     }
+    window.addEventListener("pageshow", restorePresetSelection);
+    restorePresetSelection();
   </script>
 </body>
 </html>

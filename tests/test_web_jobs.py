@@ -105,6 +105,60 @@ class WebJobTests(unittest.TestCase):
                 self.assertIn("writing_report", event_states)
                 self.assertIn("completed", event_states)
 
+    def test_job_manager_ignores_ui_only_preset_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings(
+                output_dir=str(Path(temp_dir) / "out"),
+                cache_dir=str(Path(temp_dir) / "cache"),
+                web_db_path=str(Path(temp_dir) / "web.sqlite3"),
+                sample_rate=1000,
+                sample_width=2,
+                channels=1,
+            )
+            store = RunStore(settings.web_db_path)
+            store.save_preset(
+                "UI preset",
+                {
+                    "provider": "gemini",
+                    "mode": "compare",
+                    "input_type": "single_text",
+                    "fit_mode": "measure",
+                },
+            )
+            manager = JobManager(settings, store)
+
+            def fake_get_provider(name, provider_settings):
+                return FakeProvider(provider_settings, name=name)
+
+            with (
+                patch("src.web.get_provider", side_effect=fake_get_provider),
+                patch("src.runner.get_provider", side_effect=fake_get_provider),
+            ):
+                run_id = manager.submit_synth(
+                    {
+                        "preset_name": "UI preset",
+                        "provider": "gemini",
+                        "segments": [
+                            {
+                                "id": "s1",
+                                "startTime": 0,
+                                "endTime": 100,
+                                "description": "hello world",
+                            }
+                        ],
+                    }
+                )
+
+                progress = None
+                for _ in range(100):
+                    progress = manager.progress(run_id)
+                    if progress and progress["state"] == "completed":
+                        break
+                    time.sleep(0.02)
+
+                self.assertIsNotNone(progress)
+                self.assertEqual(progress["state"], "completed")
+
     def test_create_app_exposes_dashboard_route(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings(
