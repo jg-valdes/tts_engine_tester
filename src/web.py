@@ -122,7 +122,9 @@ def _sanitize_preset(payload: dict) -> dict:
 
 
 def _build_overrides(payload: dict, preset_config: dict | None = None) -> dict:
-    merged = dict(preset_config or {})
+    merged = {
+        key: value for key, value in (preset_config or {}).items() if key in _FIELD_TYPES
+    }
     for field_name in _FIELD_TYPES:
         if field_name in payload:
             coerced = _coerce(field_name, payload.get(field_name))
