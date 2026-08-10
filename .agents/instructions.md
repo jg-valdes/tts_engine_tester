@@ -12,6 +12,8 @@ This repo uses **uv** for dependency management. Do not use bare `pip` or
 - `uv sync` — install dependencies into `.venv`.
 - `uv run <cmd>` — run anything inside the project environment, e.g.
   `uv run tts-harness synth --input segments.example.json`.
+- `./start.sh [port]` — start the local web UI, using `PORT`, then
+  `WEB_PORT`, then `8000` when no explicit port argument is provided.
 - `uv add <package>` — add a new dependency (updates `pyproject.toml` and
   `uv.lock`).
 

@@ -62,8 +62,12 @@ See `uv run tts-harness --help` for all commands (`synth`, `variance`, `voices`,
 For an easier local testing loop, start the web UI:
 
 ```bash
-uv run tts-harness web
+./start.sh
+./start.sh 8001
 ```
+
+`start.sh` runs the existing web command through `uv` and resolves the port in
+this order: explicit argument, `PORT`, `WEB_PORT`, then `8000`.
 
 It opens a local FastAPI app for:
 

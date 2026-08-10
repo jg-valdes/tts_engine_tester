@@ -400,6 +400,9 @@
           field.dataset.currentValue = value ?? "";
         }
       });
+      syncInputPanels();
+      syncProviderTab();
+      renderAzureVoiceOptions();
     }
 
     async function savePresetConfig(name, config) {
@@ -537,8 +540,6 @@
       const values = preset ? { ...defaultSettings, ...preset.config, ...(draft || {}) } : defaultSettings;
       applyFormValues(values);
       window.localStorage.setItem(presetStorageKey, event.target.value || "");
-      renderAzureVoiceOptions();
-      syncProviderTab();
     });
 
     document.getElementById("save-preset").addEventListener("click", async () => {
@@ -584,9 +585,9 @@
     if (rememberedPreset !== null) {
       presetSelect.value = rememberedPreset;
       presetSelect.dispatchEvent(new Event("change"));
+    } else {
+      applyFormValues(defaultSettings);
     }
-    syncInputPanels();
-    syncProviderTab();
   </script>
 </body>
 </html>

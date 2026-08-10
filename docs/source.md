@@ -195,9 +195,17 @@ uv run tts-harness compare --input segments.json \
 
 # Local browser UI for iterative testing
 uv run tts-harness web
+
+# Local browser UI via repo launcher
+./start.sh
+./start.sh 8001
 ```
 
 Add `--no-cache` to force fresh renders and `--dry-run` to print the fully resolved config and the exact payload (SSML or prompt) without making a call.
+
+`start.sh` is a convenience wrapper around the existing web command. It picks
+the port from the explicit argument first, then `PORT`, then `WEB_PORT`, and
+finally falls back to `8000`.
 
 For `synth --text`, `--duration` is optional. When omitted, the run is treated
 as untimed: the segment starts at `0`, no target fit is enforced, and the
